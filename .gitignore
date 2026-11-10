@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets & Environment variables (NEVER COMMIT)
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases & runtime state
+data/pm_markets/*.sqlite3
+data/pm_markets/*.sqlite3-journal
+data/pm_markets/*.sqlite3-wal
+data/pm_markets/*.sqlite3-shm
+data/pm_markets/*.lock
+data/logs/
+
+# OS / Editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
