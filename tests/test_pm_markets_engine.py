@@ -220,6 +220,18 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         )
         self.assertAlmostEqual(bid_int.total_usdc, 80.0 * 0.15 + 50.0 * 0.12, places=6)
 
+        # Verify deterministic select_optimal_basket picks the mathematical R/R peak without human discretion
+        opt_report = MarketStrategyOptimizer.select_optimal_basket(
+            outcomes=outcomes_go,
+            budget_usd=400.0,
+            max_sum_ask=0.45,
+            min_acceptable_rr=1.0,
+            uncovered_maturity_loss_fraction=0.25,
+        )
+        self.assertTrue(opt_report.is_profitable_go)
+        self.assertGreater(opt_report.effective_rr, 1.0)
+        self.assertGreater(len(opt_report.leg_shares), 0)
+
     def test_three_way_reconciliation_and_guardian(self) -> None:
         """Verifies Section 6.1 & 6.2: 3-Way Truth Reconciliation and Auto-Pegging."""
         vault = MarketVault("test_reconcile", data_dir=self.data_dir)
