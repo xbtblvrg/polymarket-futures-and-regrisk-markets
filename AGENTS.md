@@ -52,17 +52,20 @@ Minden újonnan beküldött vagy szkennelt piacnál a rendszernek — mindenfél
    - Lekérdezi a piac összes opcióját, pontos elszámolási szabályát (`resolution rules`), hátralévő időtartamát ($T - t_0$), valamint minden releváns opció teljes élő CLOB vételi (`Bid Ladder`) és eladási (`Ask Ladder`) könyvét, a tényleges árlépésközt (`orderPriceMinTickSize`) és a minimum megbízási méretet (`min_order_size`).
    - Lekérdezi a piac mögöttes folyamatának összes releváns, aktuális külső tényadatát.
 2. **2. Lépés — Első-Elvű Megoldáskeresés Teljes Szabadsággal (`Unconstrained First-Principles Solution Search`):**
-   - A nyers tényadatokból és a piaci árakból kiindulva első elvekből levezeti, hol van a piacon **valódi matematikai félreárazás (`Edge`) vagy strukturális aszimmetria**, és melyik $\mathbf{q} \ge \mathbf{0}$ pozíció- és végrehajtási vektor adja a legmagasabb valós `Risk/Reward` arányt (egymást kizáró és nem kizáró kimeneteli állapottereket egyaránt pontosan kezelve).
-3. **3. Lépés — Szigorú Realitás- és Könyv-Integrál Bizonyítás (`Strict Realism & Book-Integral Proof`):**
-   - Minden vizsgált megoldási tervre egzaktul, kívülről bemondott konstansok nélkül bizonyítja:
+   - A nyers tényadatokból és a piaci árakból kiindulva első elvekből levezeti, hol van a piacon **valódi matematikai félreárazás (`Edge`) vagy strukturális aszimmetria**, és melyik $\mathbf{q} \ge \mathbf{0}$ pozíció- és végrehajtási pálya ($\mathcal{P}$) adja a legmagasabb valós `Risk/Reward` arányt (egymást kizáró és nem kizáró kimeneteli állapottereket, egyedi lábakat, tetszőleges $K \in \{1, \dots, N\}$ kosarakat és többlépcsős dinamikus tőkekivételi / `Free-Roll` pályákat egyaránt pontosan kezelve).
+   - **Független, Minta-Arányos Valószínűségi Kalibráció (`Independent Sample-Weighted Probability Law — Zero Market Anchoring`):** A valódi kimeneteli valószínűségeket ($P_{\text{true}}$) tilos kis mintás megfigyelésekből korlátlanul extrapolálni, de **ugyanúgy tilos a piaci árhoz (`CLOB Ask/Mid`) hozzáláncolni** (hiszen egy félreárazott vagy friss hírt késve követő piacon épp a piaci ár a hibás!). A modellnek független fundamentális alapeloszlásból, az aktuális minta statisztikai információs súlyából és az élő strukturális/sérülési sokkokból kell levezetnie $P_{\text{true}}$-t.
+3. **3. Lépés — Szigorú Pálya-Konzisztencia és Könyv-Integrál Bizonyítás (`Path-Consistent Valuation & Book-Integral Proof`):**
+   - Minden vizsgált $(\mathbf{q}, \mathcal{P})$ megoldási tervre egzaktul, kívülről bemondott konstansok nélkül bizonyítja:
      - **A valós belépési költséget és átlagárat (`VWAP`):** Az eladási könyv integráljából ($\int_0^{q_i} \text{Ask}_i(u)\,du$) vagy — passzív `Maker` építésnél — a valószínűségi axiómákkal ($\sum_{\omega \in \Omega} P(\omega) = 1$) és a hátralévő időtartammal ($T - t_0$) konzisztens, reálisan teljesülő árszintekből.
-     - **A valós likvidációs értéket és a védett maximális veszteséget ($\text{MaxLoss}_{\text{guarded}}$):** Kizárólag az élő vételi könyv (`Bid Ladder`) kumulatív integráljából ($\sum_i \int_0^{q_i} \text{Bid}_i(u, t)\,du$) és az alapfolyamat két kereskedési ablak közötti maximális kedvezőtlen elmozdulásából ($\Delta p_i$). Ha egy piacon nincs köztes likvid kiszállási ablak (diszkontinuus ugráskockázat) vagy a `Bid` könyv nem nyeli el a pozíciót, a rendszer a teljes befektetett tőkét tekinti valós kockázatnak.
-4. **4. Lépés — A 4 Kötelező Kimeneteli Szám Prezentálása:**
-   - Minden javasolt megoldásnál (és minden összehasonlított alternatívánál) kötelezően kimutatja:
-     1. **Maximális veszteség ($\text{MaxLoss}_{\text{guarded}}$ és naiv lejáratkori kockázat),**
-     2. **Maximális elérhető profit ($\text{MaxProfit}$),**
-     3. **Reális várható profit ($\mathbb{E}[\text{PnL}_{\text{real}}]$),**
-     4. **Valós `Risk/Reward` arány ($\text{R/R}_{\text{effective}}$) és az ebből következő `GO / NO-GO` ítélet.**
+     - **Pálya- és Időhorizont-Azonosság (`Path & Horizon Parity Invariant`):** A számlálót ($\mathbb{E}[\text{PnL}(\mathcal{P})]$, $\text{MaxProfit}(\mathcal{P})$) és a nevezőt ($\text{MaxLoss}_{\text{guarded}}(\mathcal{P})$) **kizárólag ugyanazon a $\mathcal{P}$ végrehajtási és kiszállási döntési fán** szabad kiszámolni. Szigorúan tilos a számlálóban egy 100%-ig lejáratig tartott (`$1.00`) kifizetést feltételezni, miközben a nevezőben 1 napos `Bid`-könyv likvidációs veszteséggel számolunk:
+       - Ha a $\mathcal{P}$ pálya lejáratig tart ($\tau = T$), a veszteségoldalon kötelezően szerepel a lefedetlen állapotok ($1 - \sum_{i \in S} P_i$) lejárati tőkevesztése.
+       - Ha a $\mathcal{P}$ pálya köztes `Bid`-könyv stop-losszal vagy többlépcsős átárazódási tőkekivétellel (`Free-Roll`) dolgozik, akkor mind a védett veszteséget ($\sum_i \int_0^{q_i} \text{Bid}_i(u, \tau)\,du$ és $\Delta p_i$ alapján), mind a várható nyereséget **ugyanannak a többlépcsős $\mathcal{P}$ pályának a valós `Bid`-könyvbeli és maradvány-kifizetési ágaiból** kell levezetni.
+4. **4. Lépés — Globális Optimum Egyedisége és A 4 Kötelező Kimeneteli Szám (`Global Argmax Uniqueness & 4 Mandatory Metrics`):**
+   - A rendszernek tilos üzenetenként kézzel új kosárméreteket vagy ad-hoc képleteket rögtönöznie: minden piacon végig kell értékelnie a teljes megengedett $(\mathbf{q}, \mathcal{P})$ megoldási teret, és **kizárólag a globális matematikai optimumot ($\arg\max \text{R/R}_{\text{effective}}$)** szabad egyetlen, reprodukálható döntésként kiadnia, kimutatva:
+     1. **Maximális veszteség ($\text{MaxLoss}_{\text{guarded}}(\mathcal{P}^*)$ és naiv lejáratkori kockázat),**
+     2. **Maximális elérhető profit ($\text{MaxProfit}(\mathcal{P}^*)$),**
+     3. **Reális várható profit ($\mathbb{E}[\text{PnL}_{\text{real}}(\mathcal{P}^*)]$),**
+     4. **Valós `Risk/Reward` arány ($\text{R/R}_{\text{effective}}(\mathcal{P}^*)$) és az ebből következő `GO / NO-GO` ítélet.**
 
 ---
 

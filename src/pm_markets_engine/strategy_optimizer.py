@@ -236,55 +236,52 @@ class MarketStrategyOptimizer:
     @staticmethod
     def select_optimal_basket(
         outcomes: List[OutcomeSpec],
-        budget_usd: float = 1000.0,
-        max_sum_ask: float = 0.45,
+        budget_usd: float,
+        joint_states: Optional[List[JointStateSpec]] = None,
         has_discontinuous_gap_risk: bool = False,
-        min_acceptable_rr: float = 1.0,
-        uncovered_maturity_loss_fraction: float = 0.25,
+        min_acceptable_rr: float = 0.0,
+        uncovered_maturity_loss_fraction: float = 0.0,
     ) -> PositionProofReport:
         """
-        Deterministic, zero-discretion basket selector:
+        Deterministic, zero-constant, unconstrained subset optimizer:
         1. Ranks eligible outcomes by empirical edge ratio (true_prob / top_ask).
-        2. Evaluates every basket size K = 1..N while cumulative top_ask <= max_sum_ask.
-        3. Returns the single mathematically optimal PositionProofReport maximizing Effective R/R and E[PnL].
+        2. Evaluates every basket size K = 1..N across the entire outcome space without arbitrary sum_ask or K cutoffs.
+        3. Returns the single global argmax PositionProofReport maximizing Effective R/R and Realistic Expected Profit.
         """
         scored = []
         for o in outcomes:
             top_ask = o.orderbook.asks[0].price if o.orderbook.asks else o.target_entry_price
-            if top_ask <= 0.0 or top_ask >= 0.99 or o.true_prob <= 0.0:
+            if top_ask <= 0.0 or top_ask >= 1.0 or o.true_prob <= 0.0:
                 continue
             scored.append((o.true_prob / top_ask, top_ask, o))
         scored.sort(key=lambda x: x[0], reverse=True)
 
         candidate_vectors: List[Dict[str, float]] = []
-        cum_ask = 0.0
         prefix: List[Tuple[float, float, OutcomeSpec]] = []
         for edge_ratio, top_ask, o in scored:
-            if edge_ratio < 1.0 and len(prefix) >= 4:
-                break
-            if cum_ask + top_ask > max_sum_ask and prefix:
-                break
-            cum_ask += top_ask
             prefix.append((edge_ratio, top_ask, o))
-            # Allocate budget proportionally to edge-weighted ask price
-            weights = {item[2].token_id: item[2].true_prob for item in prefix}
-            w_sum = sum(weights.values())
-            if w_sum > 0:
-                vec: Dict[str, float] = {}
+            # Candidate A: probability-proportional allocation across the K outcomes
+            weights_prob = {item[2].token_id: item[2].true_prob for item in prefix}
+            w_prob_sum = sum(weights_prob.values())
+            if w_prob_sum > 0:
+                vec_prob: Dict[str, float] = {}
                 for _, item_ask, item_o in prefix:
-                    alloc_usd = budget_usd * (weights[item_o.token_id] / w_sum)
-                    vec[item_o.token_id] = alloc_usd / item_ask
-                candidate_vectors.append(vec)
+                    alloc_usd = budget_usd * (weights_prob[item_o.token_id] / w_prob_sum)
+                    vec_prob[item_o.token_id] = alloc_usd / item_ask
+                candidate_vectors.append(vec_prob)
 
-        if not candidate_vectors and scored:
-            top_o = scored[0][2]
-            top_ask = scored[0][1]
-            candidate_vectors.append({top_o.token_id: budget_usd / top_ask})
+            # Candidate B: equal-payout (Dutching) allocation across the K outcomes
+            ask_sum = sum(item[1] for item in prefix)
+            if ask_sum > 0:
+                equal_shares = budget_usd / ask_sum
+                vec_eq = {item[2].token_id: equal_shares for item in prefix}
+                candidate_vectors.append(vec_eq)
 
         reports = [
             MarketStrategyOptimizer.prove_position_vector(
                 outcomes=outcomes,
                 leg_shares=vec,
+                joint_states=joint_states,
                 has_discontinuous_gap_risk=has_discontinuous_gap_risk,
                 min_acceptable_rr=min_acceptable_rr,
                 uncovered_maturity_loss_fraction=uncovered_maturity_loss_fraction,
