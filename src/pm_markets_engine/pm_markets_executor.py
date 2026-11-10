@@ -1,6 +1,6 @@
 """Standalone Polymarket Multi-Option & Futures CLOB Executor (`AutonomousMarketsExecutor`).
 
-Implements Section 7.1, 7.2, and 7.3 of the Master Blueprint:
+Implements Section 6.1, 6.2, and 6.3 of the Master Blueprint (`AGENTS.md`):
 - Connects directly to `py_clob_client_v2` / `py_clob_client` L1/L2 protocol (`signature_type=1`).
 - Code-level ban on `cancel_all()` and `cancel_market_orders()`; only single `order_id` cancellation verified
   against `MarketVault` and `CentralWalletGuard` is permitted.
@@ -31,9 +31,14 @@ class LegReconciliationRow:
     wallet_shares: float
     wallet_vwap: float
     open_order_shares: float
-    unfilled_discrepancy: float
+    wallet_shortfall: float
+    unplaced_discrepancy: float
     is_verified_on_chain: bool
     status_action: str
+
+    @property
+    def unfilled_discrepancy(self) -> float:
+        return self.wallet_shortfall
 
 
 class AutonomousMarketsExecutor:
@@ -102,16 +107,16 @@ class AutonomousMarketsExecutor:
             self.dry_run = True
 
     def cancel_all(self, *_args: Any, **_kwargs: Any) -> None:
-        """Code-level ban on global order cancellation (Section 7.3.2.B)."""
+        """Code-level ban on global order cancellation (Section 6.3.2.B)."""
         raise RuntimeError(
-            "FORBIDDEN_OPERATION: Global cancel_all() is strictly prohibited by Section 7.3.2.B. "
+            "FORBIDDEN_OPERATION: Global cancel_all() is strictly prohibited by Section 6.3.2.B. "
             "Use cancel_market_order_by_id(vault, order_id) instead."
         )
 
     def cancel_market_orders(self, *_args: Any, **_kwargs: Any) -> None:
-        """Code-level ban on blanket market order cancellation (Section 7.3.2.B)."""
+        """Code-level ban on blanket market order cancellation (Section 6.3.2.B)."""
         raise RuntimeError(
-            "FORBIDDEN_OPERATION: Blanket cancel_market_orders() is strictly prohibited by Section 7.3.2.B. "
+            "FORBIDDEN_OPERATION: Blanket cancel_market_orders() is strictly prohibited by Section 6.3.2.B. "
             "Use cancel_market_order_by_id(vault, order_id) instead."
         )
 
@@ -228,9 +233,9 @@ class AutonomousMarketsExecutor:
         self,
         vault: MarketVault,
         wallet_shares_override: Optional[Dict[str, float]] = None,
-        dust_tolerance: float = 0.05,
+        dust_tolerance: float = 1e-6,
     ) -> List[LegReconciliationRow]:
-        """Executes the Three-Way Truth Reconciliation Loop (Section 7.1)."""
+        """Executes the Three-Way Truth Reconciliation Loop (Section 6.1)."""
         targets = vault.get_target_positions()
         inv = vault.get_verified_inventory()
         rows: List[LegReconciliationRow] = []
@@ -238,11 +243,11 @@ class AutonomousMarketsExecutor:
         for token_id, target in targets.items():
             if wallet_shares_override is not None and token_id in wallet_shares_override:
                 w_sh = float(wallet_shares_override[token_id])
-                vwap = inv.get(token_id, {}).get("vwap_price", target.max_entry_price)
+                vwap = inv.get(token_id, {}).get("vwap_price", 0.0)
                 vault.update_verified_inventory(token_id, w_sh, vwap)
             elif not self.dry_run and self.client is not None:
                 w_sh = self.get_on_chain_conditional_shares(token_id)
-                vwap = inv.get(token_id, {}).get("vwap_price", target.max_entry_price)
+                vwap = inv.get(token_id, {}).get("vwap_price", 0.0)
                 vault.update_verified_inventory(token_id, w_sh, vwap)
             else:
                 w_sh = inv.get(token_id, {}).get("wallet_shares", 0.0)
@@ -254,15 +259,16 @@ class AutonomousMarketsExecutor:
                 for o in open_orders
                 if o["side"] == "BUY"
             )
-            discrepancy = round(target.target_shares - w_sh, 6)
-            is_verified = (abs(discrepancy) <= dust_tolerance and open_rem_shares <= 1e-6)
+            wallet_shortfall = round(target.target_shares - w_sh, 6)
+            unplaced = round(max(0.0, target.target_shares - (w_sh + open_rem_shares)), 6)
+            is_verified = (abs(wallet_shortfall) <= dust_tolerance and open_rem_shares <= 1e-6)
 
             if is_verified:
                 action = "VERIFIED_ON_CHAIN"
-            elif open_rem_shares > 0.0:
+            elif open_rem_shares > 0.0 and unplaced <= dust_tolerance:
                 action = f"WORKING_MAKER_GTC ({open_rem_shares:.2f} sh open)"
             else:
-                action = f"NEEDS_REOPTIMIZATION_OR_FILL ({discrepancy:.2f} sh missing)"
+                action = f"NEEDS_REOPTIMIZATION_OR_FILL ({wallet_shortfall:.2f} sh shortfall, {unplaced:.2f} sh unplaced)"
 
             rows.append(
                 LegReconciliationRow(
@@ -274,7 +280,8 @@ class AutonomousMarketsExecutor:
                     wallet_shares=round(w_sh, 4),
                     wallet_vwap=round(vwap, 4),
                     open_order_shares=round(open_rem_shares, 4),
-                    unfilled_discrepancy=round(discrepancy, 4),
+                    wallet_shortfall=round(wallet_shortfall, 4),
+                    unplaced_discrepancy=round(unplaced, 4),
                     is_verified_on_chain=is_verified,
                     status_action=action,
                 )
@@ -283,7 +290,7 @@ class AutonomousMarketsExecutor:
 
     @staticmethod
     def format_three_column_receipt(rows: List[LegReconciliationRow]) -> str:
-        """Formats the 3-Column Verified Execution Receipt (Section 7.2.4) as Markdown."""
+        """Formats the 3-Column Verified Execution Receipt (Section 6.2.3) as Markdown."""
         lines = [
             "| Outcome (`Role`) | 1. Target Plan (`Target Shares @ Max Price`) | 2. On-Chain Wallet Verified (`Settled Shares @ VWAP`) | 3. Open Orders & Reconciliation Action |",
             "| :--- | :---: | :---: | :--- |",

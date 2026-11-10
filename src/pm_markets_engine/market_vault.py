@@ -1,6 +1,6 @@
 """Per-Market Isolated SQLite Vault & Ledger (`data/pm_markets/<market_slug>.sqlite3`).
 
-Implements Section 6.5 and Section 7.3.1 of the Master Blueprint:
+Implements Section 5 and Section 6.3.1 of the Master Blueprint (`AGENTS.md`):
 - Each market `m` has its own dedicated SQLite file.
 - Strictly separates `TotalUnspentCash_m`, `OpenBuyLocks_m`, and `AvailableCash_m`:
     TotalUnspentCash_m(t) = ApprovedDeposits_m(t) - NetBuyCost_m(t) + RealizedSellProceeds_m(t)
@@ -35,11 +35,11 @@ class VaultCashState:
 class TargetLegPlan:
     token_id: str
     outcome_name: str
-    role_set: str
     target_shares: float
     max_entry_price: float
     tick_size: float
     min_order_size: float
+    role_set: str = "primary"
 
 
 class MarketVault:
@@ -127,7 +127,7 @@ class MarketVault:
             conn.commit()
 
     def get_cash_state(self) -> VaultCashState:
-        """Computes exact isolated cash state per Section 7.3.1."""
+        """Computes exact isolated cash state per Section 6.3.1."""
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT entry_type, COALESCE(SUM(amount_usd), 0.0) AS total FROM vault_ledger GROUP BY entry_type"
@@ -265,6 +265,30 @@ class MarketVault:
             conn.execute(
                 "INSERT INTO vault_ledger (entry_type, amount_usd, reference_id, note, created_at) VALUES (?, ?, ?, ?, ?)",
                 (entry_type, notional, order_id, f"{side} {newly_matched_shares:.4f} sh @ {eff_price:.4f}", now),
+            )
+            token_id = str(row["token_id"])
+            inv_row = conn.execute(
+                "SELECT wallet_shares, vwap_price FROM verified_inventory WHERE token_id = ?",
+                (token_id,),
+            ).fetchone()
+            prev_sh = float(inv_row["wallet_shares"]) if inv_row else 0.0
+            prev_vwap = float(inv_row["vwap_price"]) if inv_row else 0.0
+            if side == "BUY":
+                new_sh = round(prev_sh + newly_matched_shares, 6)
+                new_vwap = round(((prev_sh * prev_vwap) + notional) / new_sh, 6) if new_sh > 0.0 else 0.0
+            else:
+                new_sh = round(max(0.0, prev_sh - newly_matched_shares), 6)
+                new_vwap = prev_vwap if new_sh > 0.0 else 0.0
+            conn.execute(
+                """
+                INSERT INTO verified_inventory (token_id, wallet_shares, vwap_price, last_verified_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(token_id) DO UPDATE SET
+                    wallet_shares = excluded.wallet_shares,
+                    vwap_price = excluded.vwap_price,
+                    last_verified_at = excluded.last_verified_at;
+                """,
+                (token_id, new_sh, new_vwap, now),
             )
             conn.commit()
 

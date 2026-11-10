@@ -11,6 +11,7 @@ from pm_markets_engine import (
     AutonomousMarketsExecutor,
     AutonomousMarketsGuardian,
     CentralWalletGuard,
+    JointStateSpec,
     LadderLevel,
     MarketStrategyOptimizer,
     MarketVault,
@@ -140,6 +141,23 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         )
         self.assertFalse(proof_nogo.is_profitable_go)
 
+        # Verify non-mutually-exclusive joint state space evaluation (zero NegRisk-only bias)
+        joint_states = [
+            JointStateSpec("both_win", probability=0.25, winning_token_ids=("t1", "t2")),
+            JointStateSpec("only_t1", probability=0.35, winning_token_ids=("t1",)),
+            JointStateSpec("only_t2", probability=0.25, winning_token_ids=("t2",)),
+            JointStateSpec("neither", probability=0.15, winning_token_ids=()),
+        ]
+        joint_proof = MarketStrategyOptimizer.prove_position_vector(
+            outcomes=outcomes_go[:2],
+            leg_shares={"t1": 1000.0, "t2": 1000.0},
+            joint_states=joint_states,
+        )
+        self.assertTrue(joint_proof.is_profitable_go)
+        # When both t1 and t2 win simultaneously, gross payout is 2000.0 - 400.0 cost = +1600.0 max profit
+        self.assertAlmostEqual(joint_proof.total_cost_usd, 400.0, places=4)
+        self.assertAlmostEqual(joint_proof.max_profit_usd, 1600.0, places=4)
+
         # Verify exact Ask/Bid ladder integration math
         ask_int = integrate_ask_ladder(
             (LadderLevel(0.10, 100.0), LadderLevel(0.12, 100.0)),
@@ -178,16 +196,21 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
             on_chain_wallet_usdc=1000.0,
             simulated_order_id="ord_x_1",
         )
-        vault.record_order_fill(oid, newly_matched_shares=600.0, fill_price=0.24)
-        rows_partial = self.executor.reconcile_market_state(vault, wallet_shares_override={"tok_x": 600.0})
+        vault.record_order_fill(oid, newly_matched_shares=600.0, fill_price=0.22)
+        rows_partial = self.executor.reconcile_market_state(vault)
         self.assertEqual(len(rows_partial), 1)
         self.assertFalse(rows_partial[0].is_verified_on_chain)
-        self.assertAlmostEqual(rows_partial[0].unfilled_discrepancy, 400.0, places=4)
+        self.assertAlmostEqual(rows_partial[0].wallet_shares, 600.0, places=4)
+        self.assertAlmostEqual(rows_partial[0].wallet_vwap, 0.22, places=4)
+        self.assertAlmostEqual(rows_partial[0].wallet_shortfall, 400.0, places=4)
+        self.assertAlmostEqual(rows_partial[0].unplaced_discrepancy, 0.0, places=4)
         self.assertAlmostEqual(rows_partial[0].open_order_shares, 400.0, places=4)
 
         vault.record_order_fill(oid, newly_matched_shares=400.0, fill_price=0.24)
-        rows_done = self.executor.reconcile_market_state(vault, wallet_shares_override={"tok_x": 1000.0})
+        rows_done = self.executor.reconcile_market_state(vault)
         self.assertTrue(rows_done[0].is_verified_on_chain)
+        # Exact VWAP across 600 sh @ 0.22 and 400 sh @ 0.24 is (132 + 96) / 1000 = 0.228
+        self.assertAlmostEqual(rows_done[0].wallet_vwap, 0.228, places=4)
         self.assertEqual(rows_done[0].status_action, "VERIFIED_ON_CHAIN")
 
         receipt_md = self.executor.format_three_column_receipt(rows_done)

@@ -1,14 +1,14 @@
 r"""Live CLOB Orderbook Integral & Market Evaluator (`MarketScannerEvaluator`).
 
-Implements Section 3.8.1, Section 3.8.2, and Section 6.1 of the Master Blueprint:
-- Exact Ask-ladder integration for entry slippage and VWAP.
+Implements Section 3 and Section 5 of the Master Blueprint (`AGENTS.md`):
+- Exact Ask-ladder integration for entry slippage and VWAP (`\int_0^{q_i} Ask_i(u) du`).
 - Exact Bid-ladder integration (`\int_0^{q_i} Bid_i(u) du`) for true endogenous liquidation value (`MaxLoss_guarded`).
-- Dynamic tick size (`orderPriceMinTickSize`) and minimum order size (`min_order_size`) extraction.
+- Dynamic tick size (`orderPriceMinTickSize`) and minimum order size (`min_order_size`) extraction with zero hardcoded fallbacks.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 
@@ -134,7 +134,12 @@ class MarketScannerEvaluator:
             raise LookupError(f"Event slug {event_slug!r} not found on Gamma API.")
         return items[0]
 
-    def fetch_orderbook(self, token_id: str, fallback_tick: float = 0.001, fallback_min_size: float = 5.0) -> OrderbookSnapshot:
+    def fetch_orderbook(
+        self,
+        token_id: str,
+        explicit_tick: Optional[float] = None,
+        explicit_min_size: Optional[float] = None,
+    ) -> OrderbookSnapshot:
         resp = requests.get(
             f"{CLOB_API_BASE}/book",
             params={"token_id": token_id},
@@ -155,12 +160,16 @@ class MarketScannerEvaluator:
                 key=lambda x: x.price,
             )
         )
-        tick = float(raw.get("tick_size") or fallback_tick)
-        min_sz = float(raw.get("min_order_size") or fallback_min_size)
+        raw_tick = raw.get("tick_size") or raw.get("minimum_tick_size") or raw.get("orderPriceMinTickSize") or explicit_tick
+        raw_min_sz = raw.get("min_order_size") or raw.get("minimum_order_size") or explicit_min_size
+        if raw_tick is None or float(raw_tick) <= 0.0:
+            raise ValueError(f"Live CLOB /book response for token_id={token_id!r} missing valid tick_size.")
+        if raw_min_sz is None or float(raw_min_sz) < 0.0:
+            raise ValueError(f"Live CLOB /book response for token_id={token_id!r} missing valid min_order_size.")
         return OrderbookSnapshot(
             token_id=token_id,
             bids=bids,
             asks=asks,
-            tick_size=tick,
-            min_order_size=min_sz,
+            tick_size=float(raw_tick),
+            min_order_size=float(raw_min_sz),
         )

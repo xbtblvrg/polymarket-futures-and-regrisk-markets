@@ -1,6 +1,6 @@
 """Sequential Multiplexed Background Guardian (`AutonomousMarketsGuardian`).
 
-Implements Section 6.4, Section 7.2.2, and Section 7.3.2.C of the Master Blueprint:
+Implements Section 4, Section 6.2.1, and Section 6.3.2.C of the Master Blueprint (`AGENTS.md`):
 - Single sequential `flock`-synchronized loop across all registered `data/pm_markets/*.sqlite3` databases.
 - Runs 3-Way Truth Reconciliation and Auto-Pegging (`Cancel & Replace` within max entry price and tick size).
 """
@@ -27,7 +27,7 @@ class AutonomousMarketsGuardian:
         max_entry_price: float,
         live_book: OrderbookSnapshot,
     ) -> float | None:
-        """Section 7.2.2: Computes new Maker limit price if queue priority is lost but within `max_entry_price`."""
+        """Section 6.2.1: Computes new Maker limit price if queue priority is lost but within `max_entry_price`."""
         if not live_book.bids:
             return None
         best_bid = live_book.best_bid

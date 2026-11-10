@@ -1,6 +1,6 @@
 """Multi-AI Quant Council CLI Usage Contract (`gpt-6-astra` & `claude-opus-5-5`).
 
-Implements Section 8.3 & 8.4 of the Master Blueprint (`AGENTS.md` / `GEMINI.md`):
+Implements Section 7.3 & 7.4 of the Master Blueprint (`AGENTS.md` / `GEMINI.md`):
 - Fixed `argv` CLI contract (`shell=False`) for:
   - OpenAI Codex (`gpt-6-astra` via `/Users/belavarga/.local/bin/codex`)
   - Anthropic Claude (`claude-opus-5-5` via `/Users/belavarga/.local/bin/claude`)
@@ -34,7 +34,8 @@ DEFAULT_CONTRACT_PATH = Path(__file__).resolve().parents[2] / "config" / "ai_cou
 
 # Regex guard enforcing the 2026-11-04 Zero Prompt Anchoring Directive
 _ANCHORING_PATTERN = re.compile(
-    r"(\(\s*(?:e\.g\.|i\.e\.|pl\.|például\b|such as\b)[^)]*\)|(?:^|\s)(?:e\.g\.|i\.e\.|pl\.|például\b))",
+    r"(\(\s*(?:e\.g\.|i\.e\.|pl\.|például\b|mint például\b|legyen az\b|such as\b|for example\b|for instance\b)[^)]*\)"
+    r"|(?:^|\s)(?:e\.g\.|i\.e\.|pl\.|például\b|mint például\b|for example\b|for instance\b|such as\b))",
     flags=re.IGNORECASE,
 )
 

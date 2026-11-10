@@ -1,6 +1,6 @@
 """Central Wallet Guard (`data/pm_markets/_wallet_guard.sqlite3`).
 
-Implements Section 7.3.2 of the Master Blueprint:
+Implements Section 6.3.2 of the Master Blueprint (`AGENTS.md`):
 - Guard A: Maker-Collateral Reservation & Dual Solvency Check across all market vaults.
 - Guard B: Global `token_id` Ownership Lock & Order Ownership Registry (preventing cross-market cancellation).
 - Guard C: Sequential Execution Mutex (`flock`) to prevent concurrent API race conditions.

@@ -20,12 +20,12 @@ A rendszer egyetlen legfőbb küldetése: **minden egyes beküldött vagy vizsg�
      1. **A legrosszabb esetbeli veszteség minimalizálása ($\min \text{MaxLoss}_{\text{guarded}}$),**
      2. **A reális várható profit ($\max \mathbb{E}[\text{PnL}_{\text{real}}]$) és a maximális elérhető profit ($\max \text{MaxProfit}$) maximalizálása,**
      3. **A valós hozam/kockázat arány ($\max \text{R/R} = \frac{\mathbb{E}[\text{PnL}_{\text{real}}]}{\text{MaxLoss}_{\text{guarded}}}$) maximalizálása.**
-   - Ha egy piacon az azonnali, nyers megközelítés nem optimális, a rendszernek tilos reflexből feladnia: meg kell vizsgálnia minden reálisan kivitelezhető strukturális, időbeli (`Maker` limit / korrekciós belépés), rész-piaci vagy kombinált megoldást.
+   - Ha egy piacon az azonnali, nyers megközelítés nem optimális, a rendszernek tilos reflexből feladnia: meg kell vizsgálnia a piac szabályaiból, könyvmélységéből és hátralévő időtartamából ($T - t_0$) levezethető összes matematikailag és végrehajtásilag reális megoldási teret.
    - **Őszinte, Bizonyított `GO` vs. `NO-GO`:** Ha létezik matematikailag és végrehajtásilag **valóban reális**, profitábilis, jó `Risk/Reward` megoldás, akkor a rendszer azt köteles megtalálni és kidolgozni (`GO`). Ha viszont a tételes bizonyítás azt mutatja, hogy a piac hátralévő időtartama ($T - t_0$), árazási telítettsége vagy könyvmélysége miatt semmilyen reális, jó `Risk/Reward` arányú megoldás nem érhető el, akkor a helyes és elfogadott döntés a bizonyítással alátámasztott **`NO-GO`**.
 
 3. **Szigorú Élő-Adat és Bizonyítási Invariáns — Soha Nem Emlékezetből (`Zero-Memory & Mandatory Proof Rule`):**
    - **Soha, semmilyen elemzés, esélybecslés, árazás vagy döntés nem alapulhat a nyelvi modell belső emlékezetén, korábbi beszélgetésen vagy ellenőrizetlen feltételezésen.**
-   - Minden egyes állítást az adott pillanatban lekérdezett, levágás (`truncation`) nélkül ellenőrzött élő API-adatokból (Polymarket Gamma & CLOB könyvek, hivatalos nyilvános tényadat-források) és egzakt matematikai levezetéssel **kell bizonyítani**.
+   - Minden egyes állítást az adott pillanatban lekérdezett, levágás (`truncation`) nélkül ellenőrzött élő API-adatokból és egzakt matematikai levezetéssel **kell bizonyítani**.
 
 ---
 
@@ -34,7 +34,7 @@ A rendszer egyetlen legfőbb küldetése: **minden egyes beküldött vagy vizsg�
 | Dimenzió | Autonóm Polymarket Multi-Market & Futures Engine (`polymarket-futures-and-regrisk-markets`) |
 | :--- | :--- |
 | **Git Repository** | **100% önálló, dedikált Git repository:** `git@github.com:xbtblvrg/polymarket-futures-and-regrisk-markets.git` |
-| **Fő feladat** | Bármely többopciós (`NegRisk`), határidős (`Futures`), korlát- (`Barrier`) vagy egyedi Polymarket CLOB piac első-elvű elemzése, felépítése és autonóm végigkereskedése |
+| **Fő feladat** | Bármely Polymarket CLOB esemény és piac első-elvű elemzése, felépítése és autonóm végigkereskedése |
 | **Időhorizont** | Tetszőleges ($[t_0, T]$, a piac valós hátralévő időtartamához és dinamikájához igazítva) |
 | **Tőkeallokáció** | **Nincs statikus egyedi tétplafon**; piac-specifikus, névre szóló tőkeallokáció ($B_{m,0}$ kezdőtőke + $\Delta B_{m,t}$ rátöltések) |
 | **Végrehajtási mód** | **100% Autonóm, Piaconként Izolált CLOB végrehajtás** (`src/pm_markets_engine/`) |
@@ -49,12 +49,12 @@ Minden újonnan beküldött vagy szkennelt piacnál a rendszernek — mindenfél
 
 1. **1. Lépés — Levágásmentes Élő Tény- és Könyv-Felderítés (`Live Untruncated State & Orderbook Discovery`):**
    - Lekérdezi a piac összes opcióját, pontos elszámolási szabályát (`resolution rules`), hátralévő időtartamát ($T - t_0$), valamint minden releváns opció teljes élő CLOB vételi (`Bid Ladder`) és eladási (`Ask Ladder`) könyvét, a tényleges árlépésközt (`orderPriceMinTickSize`) és a minimum megbízási méretet (`min_order_size`).
-   - Lekérdezi a piac mögöttes folyamatának összes releváns, aktuális külső tényadatát (eredmények, állapotmutatók, hátralévő esemény-menetrend).
+   - Lekérdezi a piac mögöttes folyamatának összes releváns, aktuális külső tényadatát.
 2. **2. Lépés — Első-Elvű Megoldáskeresés Teljes Szabadsággal (`Unconstrained First-Principles Solution Search`):**
-   - A nyers tényadatokból és a piaci árakból kiindulva megvizsgálja, hol van a piacon **valódi matematikai félreárazás (`Edge`) vagy strukturális aszimmetria**, és milyen pozíció-struktúra (legyen az egyetlen célzott pozíció, aszimmetrikus több-lábas struktúra, időben/fordulókra szétbontott `Maker` akkumuláció, köztes konvergencia-kereskedés vagy bármely új, a piacra szabott megoldás) adja a legmagasabb valós `Risk/Reward` arányt.
+   - A nyers tényadatokból és a piaci árakból kiindulva első elvekből levezeti, hol van a piacon **valódi matematikai félreárazás (`Edge`) vagy strukturális aszimmetria**, és melyik $\mathbf{q} \ge \mathbf{0}$ pozíció- és végrehajtási vektor adja a legmagasabb valós `Risk/Reward` arányt (egymást kizáró és nem kizáró kimeneteli állapottereket egyaránt pontosan kezelve).
 3. **3. Lépés — Szigorú Realitás- és Könyv-Integrál Bizonyítás (`Strict Realism & Book-Integral Proof`):**
    - Minden vizsgált megoldási tervre egzaktul, kívülről bemondott konstansok nélkül bizonyítja:
-     - **A valós belépési költséget és átlagárat (`VWAP`):** Az eladási könyv integráljából ($\int_0^{q_i} \text{Ask}_i(u)\,du$) vagy — passzív `Maker` építésnél — a valószínűségi tömegmegmaradással ($\sum_i P_i(t) = 1$) és a hátralévő időtartammal ($T - t_0$) konzisztens, reálisan teljesülő árszintekből.
+     - **A valós belépési költséget és átlagárat (`VWAP`):** Az eladási könyv integráljából ($\int_0^{q_i} \text{Ask}_i(u)\,du$) vagy — passzív `Maker` építésnél — a valószínűségi axiómákkal ($\sum_{\omega \in \Omega} P(\omega) = 1$) és a hátralévő időtartammal ($T - t_0$) konzisztens, reálisan teljesülő árszintekből.
      - **A valós likvidációs értéket és a védett maximális veszteséget ($\text{MaxLoss}_{\text{guarded}}$):** Kizárólag az élő vételi könyv (`Bid Ladder`) kumulatív integráljából ($\sum_i \int_0^{q_i} \text{Bid}_i(u, t)\,du$) és az alapfolyamat két kereskedési ablak közötti maximális kedvezőtlen elmozdulásából ($\Delta p_i$). Ha egy piacon nincs köztes likvid kiszállási ablak (diszkontinuus ugráskockázat) vagy a `Bid` könyv nem nyeli el a pozíciót, a rendszer a teljes befektetett tőkét tekinti valós kockázatnak.
 4. **4. Lépés — A 4 Kötelező Kimeneteli Szám Prezentálása:**
    - Minden javasolt megoldásnál (és minden összehasonlított alternatívánál) kötelezően kimutatja:
@@ -110,15 +110,15 @@ A rendszer **soha nem bízik vakon** abban, hogy egy beküldött megbízás (`po
    - Kizárólag a fizikailag a tárcában lévő (`settled on-chain`) share-ek számítanak ténylegesen birtokolt pozíciónak.
 3. **Élő CLOB Nyitott Megbízások (`Live CLOB Open Orders` — $\mathbf{q}_m^{\text{open}}(t)$):**
    - Közvetlenül lekérdezve a `get_open_orders()` és `get_order(order_id)` végpontokról.
-   - Minden $i \in S_m$ lábra a rendszer folyamatosan számítja a **Valós Teljesülési Hiányt (`Unfilled Discrepancy`)**:
-     $$\Delta q_{m,i}(t) = q_{m,i}^{\text{target}} - \left( q_{m,i}^{\text{wallet}}(t) + q_{m,i}^{\text{matched\_pending}}(t) \right)$$
+   - Minden $i \in S_m$ lábra a rendszer folyamatosan számítja mind a **Tárca-Elszámolási Hiányt (`Wallet Settlement Shortfall`)**, mind a **Fedezetlen / Még Ki Nem Helyezett Hiányt (`Unplaced Discrepancy`)**:
+     $$\text{WalletShortfall}_{m,i}(t) = q_{m,i}^{\text{target}} - q_{m,i}^{\text{wallet}}(t), \qquad \Delta q_{m,i}^{\text{unplaced}}(t) = \max\!\left(0,\; q_{m,i}^{\text{target}} - \left( q_{m,i}^{\text{wallet}}(t) + q_{m,i}^{\text{open}}(t) \right)\right)$$
    - Egy végrehajtási ciklus **kizárólag akkor** kap `VERIFIED_ON_CHAIN` státuszt, ha minden $i \in S_m$ lábra:
      $$\left| q_{m,i}^{\text{target}} - q_{m,i}^{\text{wallet}}(t) \right| \le \epsilon_{\text{dust}} \quad \text{és} \quad q_{m,i}^{\text{open}}(t) = 0$$
 
 ### 6.2. Adaptív Protokoll Nem Teljesülő Megbízásokra és 3-Oszlopos Chat-Igazolás
-Amikor egy `Maker` limit megbízás nem teljesül azonnal ($\Delta q_{m,i}(t) > 0$):
+Amikor egy `Maker` limit megbízás nem teljesül azonnal ($\text{WalletShortfall}_{m,i}(t) > 0$):
 1. **Automatikus Mikro-Utánhúzás (`Auto-Pegging / Cancel & Replace`):** Ha a nyitott `Maker` limit elé magasabb `Bid` kerül, de az új `Best Bid` $+\,\Delta p_{\text{tick}, i}$ még nem lépi túl a láb maximális célárát ($\bar{p}_{m,i}$), a rendszer automatikusan módosítja a limitet.
-2. **Matematikai Újratervezés Elmozduló Ár Esetén (`Dynamic Strategy Re-Optimization`):** Ha az eladási (`Ask`) ár elmozdul, a rendszer a már tárcában lévő ($\mathbf{q}_m^{\text{wallet}}$) lábak peremfeltételével újraszámítja a pozíciót, és a magasabb valós `Risk/Reward` arányú lépést választja (költségvetésen belüli `Taker` lezárás vs. a felszabaduló `USDC.e` átcsoportosítása).
+2. **Matematikai Újratervezés Elmozduló Ár Esetén (`Dynamic Strategy Re-Optimization`):** Ha a piaci könyv elmozdul, a rendszer a már tárcában lévő ($\mathbf{q}_m^{\text{wallet}}$) pozíció és a szabad kassza ($\text{AvailableCash}_m$) peremfeltételével első elvekből újraoptimalizálja a hátralévő pozíció-vektort a legmagasabb valós `Risk/Reward` arány elérése érdekében.
 3. **3-Oszlopos Hitelesített Chat-Jelentés (`3-Column Verified Execution Receipt`):**
    - **1. Tervezett Pozíció (`Target Plan`)** | **2. Tárcában Hitelesített Pozíció (`On-Chain Wallet Verified`)** | **3. Nyitott CLOB Megbízások & Korrekciós Státusz (`Open Orders & Reconciliation Action`)**.
 
