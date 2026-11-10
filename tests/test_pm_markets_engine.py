@@ -15,7 +15,7 @@ from pm_markets_engine import (
     MarketStrategyOptimizer,
     MarketVault,
     OrderbookSnapshot,
-    OutcomeCandidate,
+    OutcomeSpec,
     TargetLegPlan,
     build_cli_command,
     decode_cli_response,
@@ -37,25 +37,21 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.tmp_dir.cleanup()
 
     def test_two_layer_market_isolation_and_maker_collateral_guard(self) -> None:
-        """Verifies Section 7.3: Market A and Market B have separate SQLite DBs and cannot spend each other's Maker locks."""
+        """Verifies Section 6.3: Market A and Market B have separate SQLite DBs and cannot spend each other's Maker locks."""
         vault_a = MarketVault("market_alpha", data_dir=self.data_dir)
         vault_b = MarketVault("market_beta", data_dir=self.data_dir)
         self.assertNotEqual(vault_a.db_path, vault_b.db_path)
 
-        # Physical wallet has $1,500 USDC.e
         wallet_usdc = 1500.0
         rem_after_a = self.guard.approve_deposit(vault_a, 1000.0, on_chain_wallet_usdc=wallet_usdc)
         self.assertAlmostEqual(rem_after_a, 500.0, places=4)
 
-        # Attempting to allocate $600 to Market B when only $500 is unallocated on-chain must fail
         with self.assertRaises(ValueError):
             self.guard.approve_deposit(vault_b, 600.0, on_chain_wallet_usdc=wallet_usdc)
 
-        # Allocating $500 to Market B succeeds
         rem_after_b = self.guard.approve_deposit(vault_b, 500.0, on_chain_wallet_usdc=wallet_usdc)
         self.assertAlmostEqual(rem_after_b, 0.0, places=4)
 
-        # Market A places a resting Maker BUY order locking $600 (3000 shares @ 0.20)
         ord_a1 = self.executor.submit_isolated_limit_order(
             vault=vault_a,
             token_id="tok_a_1",
@@ -70,7 +66,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.assertAlmostEqual(state_a.open_buy_locks, 600.0, places=4)
         self.assertAlmostEqual(state_a.available_cash, 400.0, places=4)
 
-        # Token ownership lock: Market B cannot trade or claim `tok_a_1`
         with self.assertRaises(PermissionError):
             self.executor.submit_isolated_limit_order(
                 vault=vault_b,
@@ -82,33 +77,31 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
                 simulated_order_id="ord_b_illegal",
             )
 
-        # Cross-market cancellation lock: Market B cannot cancel Market A's order
         with self.assertRaises(PermissionError):
             self.executor.cancel_market_order_by_id(vault_b, ord_a1)
 
-        # Code-level ban on global cancel_all() and cancel_market_orders()
         with self.assertRaises(RuntimeError):
             self.executor.cancel_all()
         with self.assertRaises(RuntimeError):
             self.executor.cancel_market_orders()
 
-    def test_orderbook_integrals_and_reality_first_go_vs_no_go(self) -> None:
-        """Verifies Section 1.1.2, 3.2, and 3.8.1: discounted early-phase market is GO; compressed 0.96 market is NO-GO."""
-        deep_book_a = OrderbookSnapshot(
+    def test_orderbook_integrals_and_proof_first_evaluator(self) -> None:
+        """Verifies Section 3: Pure orderbook-integral proof without any hardcoded constants or forced templates."""
+        deep_book_1 = OrderbookSnapshot(
             token_id="t1",
             bids=(LadderLevel(0.19, 5000.0), LadderLevel(0.18, 5000.0)),
             asks=(LadderLevel(0.20, 5000.0),),
             tick_size=0.001,
             min_order_size=5.0,
         )
-        deep_book_b = OrderbookSnapshot(
+        deep_book_2 = OrderbookSnapshot(
             token_id="t2",
             bids=(LadderLevel(0.19, 5000.0), LadderLevel(0.18, 5000.0)),
             asks=(LadderLevel(0.20, 5000.0),),
             tick_size=0.001,
             min_order_size=5.0,
         )
-        base_book = OrderbookSnapshot(
+        deep_book_3 = OrderbookSnapshot(
             token_id="t3",
             bids=(LadderLevel(0.27, 5000.0), LadderLevel(0.26, 5000.0)),
             asks=(LadderLevel(0.28, 5000.0),),
@@ -116,38 +109,38 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
             min_order_size=5.0,
         )
 
-        # Case 1: Early-phase market with 0.68 total entry sum (0.40 alpha + 0.28 base) and 0.92 true prob coverage
-        early_candidates = [
-            OutcomeCandidate("t1", "Alpha_1", true_prob=0.30, entry_price=0.20, role_set="S_alpha", orderbook=deep_book_a),
-            OutcomeCandidate("t2", "Alpha_2", true_prob=0.30, entry_price=0.20, role_set="S_alpha", orderbook=deep_book_b),
-            OutcomeCandidate("t3", "Base_1", true_prob=0.32, entry_price=0.28, role_set="S_base", orderbook=base_book),
+        # Case 1: High-edge position vector on underpriced outcomes -> proven GO
+        outcomes_go = [
+            OutcomeSpec("t1", "Out_1", true_prob=0.30, target_entry_price=0.20, orderbook=deep_book_1, max_step_adverse_drop=0.02),
+            OutcomeSpec("t2", "Out_2", true_prob=0.30, target_entry_price=0.20, orderbook=deep_book_2, max_step_adverse_drop=0.02),
+            OutcomeSpec("t3", "Out_3", true_prob=0.32, target_entry_price=0.28, orderbook=deep_book_3, max_step_adverse_drop=0.02),
         ]
-        plan_go = MarketStrategyOptimizer.build_graded_asymmetric_plan(
-            candidates=early_candidates,
-            budget_usd=1000.0,
-            base_return_floor=0.15,
-            min_required_rr=1.5,
+        # Asymmetric vector: 1695 shares on Out_1 & Out_2, 1150 shares on Out_3 (Total cost = $1,000.00)
+        proof_go = MarketStrategyOptimizer.prove_position_vector(
+            outcomes=outcomes_go,
+            leg_shares={"t1": 1695.0, "t2": 1695.0, "t3": 1150.0},
+            min_acceptable_rr=1.5,
         )
-        self.assertTrue(plan_go.is_viable_go)
-        self.assertGreater(plan_go.q_alpha, plan_go.q_base)
-        self.assertGreater(plan_go.q_base, 1000.0)
-        self.assertGreater(plan_go.effective_rr, 2.0)
+        self.assertTrue(proof_go.is_profitable_go)
+        self.assertAlmostEqual(proof_go.total_cost_usd, 1000.0, places=4)
+        self.assertAlmostEqual(proof_go.max_profit_usd, 695.0, places=4)
+        self.assertAlmostEqual(proof_go.min_covered_profit_usd, 150.0, places=4)
+        self.assertGreater(proof_go.effective_rr, 2.0)
 
-        # Case 2: Compressed late-stage market with 0.96 entry sum -> must return NO-GO
-        compressed_candidates = [
-            OutcomeCandidate("t1", "Comp_1", true_prob=0.32, entry_price=0.34, role_set="S_alpha", orderbook=deep_book_a),
-            OutcomeCandidate("t2", "Comp_2", true_prob=0.32, entry_price=0.34, role_set="S_alpha", orderbook=deep_book_b),
-            OutcomeCandidate("t3", "Comp_Base", true_prob=0.28, entry_price=0.28, role_set="S_base", orderbook=base_book),
+        # Case 2: Overpriced / compressed market -> proven NO-GO
+        outcomes_nogo = [
+            OutcomeSpec("t1", "Comp_1", true_prob=0.30, target_entry_price=0.35, orderbook=deep_book_1, max_step_adverse_drop=0.03),
+            OutcomeSpec("t2", "Comp_2", true_prob=0.30, target_entry_price=0.35, orderbook=deep_book_2, max_step_adverse_drop=0.03),
+            OutcomeSpec("t3", "Comp_3", true_prob=0.28, target_entry_price=0.28, orderbook=deep_book_3, max_step_adverse_drop=0.03),
         ]
-        plan_nogo = MarketStrategyOptimizer.build_graded_asymmetric_plan(
-            candidates=compressed_candidates,
-            budget_usd=1000.0,
-            base_return_floor=0.10,
-            min_required_rr=1.0,
+        proof_nogo = MarketStrategyOptimizer.prove_position_vector(
+            outcomes=outcomes_nogo,
+            leg_shares={"t1": 1020.0, "t2": 1020.0, "t3": 1020.0},
+            min_acceptable_rr=1.0,
         )
-        self.assertFalse(plan_nogo.is_viable_go)
+        self.assertFalse(proof_nogo.is_profitable_go)
 
-        # Verify Ask/Bid ladder integration math
+        # Verify exact Ask/Bid ladder integration math
         ask_int = integrate_ask_ladder(
             (LadderLevel(0.10, 100.0), LadderLevel(0.12, 100.0)),
             target_shares=150.0,
@@ -162,14 +155,14 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.assertAlmostEqual(bid_int.total_usdc, 80.0 * 0.15 + 50.0 * 0.12, places=6)
 
     def test_three_way_reconciliation_and_guardian(self) -> None:
-        """Verifies Section 7.1 & 7.2: 3-Way Truth Reconciliation and Auto-Pegging."""
+        """Verifies Section 6.1 & 6.2: 3-Way Truth Reconciliation and Auto-Pegging."""
         vault = MarketVault("test_reconcile", data_dir=self.data_dir)
         self.guard.approve_deposit(vault, 500.0, on_chain_wallet_usdc=1000.0)
         vault.upsert_target_leg(
             TargetLegPlan(
                 token_id="tok_x",
                 outcome_name="Contender_X",
-                role_set="S_alpha",
+                role_set="core",
                 target_shares=1000.0,
                 max_entry_price=0.25,
                 tick_size=0.001,
@@ -185,7 +178,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
             on_chain_wallet_usdc=1000.0,
             simulated_order_id="ord_x_1",
         )
-        # Partial fill: 600 shares settled in wallet, 400 still working
         vault.record_order_fill(oid, newly_matched_shares=600.0, fill_price=0.24)
         rows_partial = self.executor.reconcile_market_state(vault, wallet_shares_override={"tok_x": 600.0})
         self.assertEqual(len(rows_partial), 1)
@@ -193,7 +185,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.assertAlmostEqual(rows_partial[0].unfilled_discrepancy, 400.0, places=4)
         self.assertAlmostEqual(rows_partial[0].open_order_shares, 400.0, places=4)
 
-        # Complete fill: remaining 400 shares settled in wallet
         vault.record_order_fill(oid, newly_matched_shares=400.0, fill_price=0.24)
         rows_done = self.executor.reconcile_market_state(vault, wallet_shares_override={"tok_x": 1000.0})
         self.assertTrue(rows_done[0].is_verified_on_chain)
@@ -218,7 +209,7 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.assertAlmostEqual(new_peg or 0.0, 0.246, places=6)
 
     def test_gpt_6_astra_and_claude_opus_5_5_cli_contract(self) -> None:
-        """Verifies Section 8.3 & 8.4: exact CLI contract for gpt-6-astra and claude-opus-5-5, zero-tool & zero-anchoring."""
+        """Verifies Section 7.3 & 7.4: exact CLI contract for gpt-6-astra and claude-opus-5-5, zero-tool & zero-anchoring."""
         council = AICouncilCLI(lock_dir=self.data_dir / "ai_locks")
         codex_cfg = council.get_provider_config("codex")
         claude_cfg = council.get_provider_config("claude")
@@ -229,7 +220,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         clean_prompt = "Deduce the optimal share allocation vector from first principles given the observed orderbook integral."
         validate_zero_anchoring_prompt(clean_prompt)
 
-        # Anchored prompt with parenthetical examples must be rejected
         with self.assertRaises(ValueError):
             validate_zero_anchoring_prompt("Model the distribution (e.g. Poisson or Copula) for this market.")
 
@@ -271,7 +261,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         )
         self.assertEqual(stdin_claude, clean_prompt)
 
-        # Verify model identity & zero-tool verification in decode_cli_response
         claude_ok_stdout = json.dumps(
             {
                 "type": "result",
@@ -291,7 +280,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.assertEqual(st_ok, "received_unreviewed")
         self.assertEqual(ans_ok, "First-principles allocation verified.")
 
-        # Tool violation must be rejected
         claude_bad_tool = json.dumps(
             {
                 "type": "result",
@@ -308,7 +296,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         )
         self.assertEqual(st_bad, "unexpected_tool_activity")
 
-        # Verify SHA-256 helper review disposition check
         advice = [{"id": "adv_1", "sha256": "abc123"}]
         valid_review = [{"id": "adv_1", "sha256": "abc123", "disposition": "used", "reason": "Verified integral proof"}]
         self.assertEqual(len(validate_helper_reviews(valid_review, advice)), 1)

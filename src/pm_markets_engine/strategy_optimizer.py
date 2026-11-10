@@ -1,11 +1,13 @@
-"""Reality-First Strategy Optimizer & Risk/Reward Engine (`MarketStrategyOptimizer`).
+"""Unconstrained First-Principles Strategy & Proof Evaluator (`MarketStrategyOptimizer`).
 
-Implements Sections 1.1.2, 3.1-3.3, 3.8.1, 5.1, and 7.2.3 of the Master Blueprint:
-- Evaluates any market starting from reality & feasibility (never forcing pre-existing templates).
-- Computes Graded Asymmetric Payout Allocation (`S_alpha` vs `S_base`).
-- Computes Endogenous Orderbook-Integral Liquidation Value & `MaxLoss_guarded`.
-- Enforces `Monotonic Payout Guard` (Section 5.1).
-- Performs Dynamic Strategy Re-Optimization when Maker legs remain unfilled (Section 7.2.3).
+Implements Sections 1, 3, and 4 of the Master Blueprint (`Zero-Anchoring, Zero-Memory & Proof-First`):
+- Zero hardcoded constants, zero forced basket templates, zero arbitrary clamps.
+- Evaluates any first-principles position vector `q` strictly from live Ask/Bid orderbook integrals
+  and verified probability distributions, proving:
+    1. MaxLoss_guarded (purely from Bid-ladder integral and step shock, or full cost if unabsorbable),
+    2. MaxProfit,
+    3. Realistic Expected Profit (E[PnL_real]),
+    4. Effective Risk/Reward Ratio (R/R).
 """
 from __future__ import annotations
 
@@ -16,166 +18,134 @@ from .scanner_evaluator import OrderbookSnapshot, integrate_ask_ladder, integrat
 
 
 @dataclass(frozen=True)
-class OutcomeCandidate:
+class OutcomeSpec:
     token_id: str
     name: str
     true_prob: float
-    entry_price: float
-    role_set: str  # 'S_alpha', 'S_base', 'S_defer', 'S_noise'
+    target_entry_price: float
     orderbook: OrderbookSnapshot
+    max_step_adverse_drop: float = 0.0  # Empirical max single-window price drop (\Delta p_i)
 
 
 @dataclass(frozen=True)
-class GradedAllocationPlan:
-    budget_usd: float
-    q_alpha: float
-    q_base: float
-    alpha_net_profit: float
-    base_net_profit: float
-    expected_passive_profit: float
-    endogenous_liquidation_value: float
-    max_loss_guarded: float
+class PositionProofReport:
+    total_cost_usd: float
+    max_profit_usd: float
+    min_covered_profit_usd: float
+    realistic_expected_profit_usd: float
+    endogenous_bid_liquidation_usd: float
+    max_loss_guarded_usd: float
+    naive_maturity_max_loss_usd: float
     effective_rr: float
     leg_shares: Dict[str, float]
-    is_viable_go: bool
-    verdict_reason: str
+    is_profitable_go: bool
+    proof_summary: str
 
 
 class MarketStrategyOptimizer:
-    """First-principles optimizer for multi-option / futures / barrier Polymarket structures."""
+    """Pure first-principles mathematical evaluator with zero template anchoring or magic constants."""
 
     @staticmethod
-    def build_graded_asymmetric_plan(
-        candidates: List[OutcomeCandidate],
-        budget_usd: float,
-        base_return_floor: float,
-        has_absorbing_gap_risk: bool = False,
-        min_required_rr: float = 1.0,
-    ) -> GradedAllocationPlan:
-        """Computes two-tier asymmetric allocation (`S_alpha` and `S_base`) and evaluates Reality-First GO/NO-GO."""
-        if budget_usd <= 0.0:
-            raise ValueError("budget_usd must be positive.")
+    def prove_position_vector(
+        outcomes: List[OutcomeSpec],
+        leg_shares: Dict[str, float],
+        has_discontinuous_gap_risk: bool = False,
+        min_acceptable_rr: float = 1.0,
+    ) -> PositionProofReport:
+        """Proves the 4 mandatory metrics (MaxLoss_guarded, MaxProfit, Realistic E[PnL], R/R) for any position vector `q`."""
+        active_outcomes = [o for o in outcomes if leg_shares.get(o.token_id, 0.0) > 0.0]
+        if not active_outcomes:
+            raise ValueError("Position vector must contain at least one positive leg.")
 
-        alpha_legs = [c for c in candidates if c.role_set == "S_alpha"]
-        base_legs = [c for c in candidates if c.role_set == "S_base"]
+        total_cost = sum(leg_shares[o.token_id] * o.target_entry_price for o in active_outcomes)
+        total_cost = round(total_cost, 6)
 
-        sum_p_base = sum(c.entry_price for c in base_legs)
-        sum_p_alpha = sum(c.entry_price for c in alpha_legs)
+        net_profits_if_win = {
+            o.token_id: round(leg_shares[o.token_id] - total_cost, 6)
+            for o in active_outcomes
+        }
+        max_profit = max(net_profits_if_win.values())
+        min_covered_profit = min(net_profits_if_win.values())
 
-        q_base = round(budget_usd * (1.0 + base_return_floor), 6) if base_legs else 0.0
-        cost_base = q_base * sum_p_base
-
-        if cost_base >= budget_usd or sum_p_alpha <= 0.0:
-            return GradedAllocationPlan(
-                budget_usd=budget_usd,
-                q_alpha=0.0,
-                q_base=q_base,
-                alpha_net_profit=-budget_usd,
-                base_net_profit=q_base - budget_usd,
-                expected_passive_profit=-budget_usd,
-                endogenous_liquidation_value=0.0,
-                max_loss_guarded=budget_usd,
-                effective_rr=0.0,
-                leg_shares={},
-                is_viable_go=False,
-                verdict_reason="NO_GO_COMPRESSION: Base shield cost exhausts budget or no viable alpha legs exist.",
-            )
-
-        rem_budget = budget_usd - cost_base
-        q_alpha = round(rem_budget / sum_p_alpha, 6)
-
-        leg_shares: Dict[str, float] = {}
-        for c in alpha_legs:
-            leg_shares[c.token_id] = q_alpha
-        for c in base_legs:
-            leg_shares[c.token_id] = q_base
-
-        alpha_net_profit = round(q_alpha - budget_usd, 6)
-        base_net_profit = round(q_base - budget_usd, 6) if base_legs else 0.0
-
-        p_alpha_total = sum(c.true_prob for c in alpha_legs)
-        p_base_total = sum(c.true_prob for c in base_legs)
-        p_uncovered = max(0.0, 1.0 - (p_alpha_total + p_base_total))
-
-        # Endogenous Orderbook Liquidation Integral (Section 3.8.1)
-        total_liq_value = 0.0
+        # Endogenous Bid-Ladder Liquidation Integral: \sum_i \int_0^{q_i} Bid_i(u) du
+        total_bid_liq = 0.0
+        step_shock_usd = 0.0
         all_absorbable = True
-        for c in alpha_legs + base_legs:
-            sh = leg_shares[c.token_id]
-            bid_int = integrate_bid_ladder(c.orderbook.bids, sh)
-            total_liq_value += bid_int.total_usdc
+
+        for o in active_outcomes:
+            sh = leg_shares[o.token_id]
+            bid_int = integrate_bid_ladder(o.orderbook.bids, sh)
+            total_bid_liq += bid_int.total_usdc
+            step_shock_usd += sh * max(0.0, o.max_step_adverse_drop)
             if not bid_int.fully_absorbable:
                 all_absorbable = False
 
-        total_liq_value = round(total_liq_value, 6)
-        if has_absorbing_gap_risk or not all_absorbable or total_liq_value <= 0.0:
-            max_loss_guarded = round(budget_usd, 6)
+        total_bid_liq = round(total_bid_liq, 6)
+        if has_discontinuous_gap_risk or not all_absorbable or total_bid_liq <= 0.0:
+            max_loss_guarded = total_cost
         else:
-            # Immediate liquidation loss + potential single-step adverse move buffer
-            immediate_spread_loss = max(0.0, budget_usd - total_liq_value)
-            max_loss_guarded = round(min(budget_usd, max(immediate_spread_loss, 0.15 * budget_usd)), 6)
+            immediate_liquidation_gap = max(0.0, total_cost - total_bid_liq)
+            max_loss_guarded = round(min(total_cost, immediate_liquidation_gap + step_shock_usd), 6)
+            if max_loss_guarded <= 0.0:
+                # Even when Bid > entry cost, bound denominator by minimum 1-tick liquidation friction
+                min_tick_friction = sum(leg_shares[o.token_id] * o.orderbook.tick_size for o in active_outcomes)
+                max_loss_guarded = round(max(1e-6, min_tick_friction), 6)
 
-        expected_passive_profit = round(
-            p_alpha_total * alpha_net_profit
-            + p_base_total * base_net_profit
-            - p_uncovered * max_loss_guarded,
+        covered_prob_sum = sum(o.true_prob for o in active_outcomes)
+        uncovered_prob = max(0.0, 1.0 - covered_prob_sum)
+
+        realistic_expected_profit = round(
+            sum(o.true_prob * net_profits_if_win[o.token_id] for o in active_outcomes)
+            - uncovered_prob * max_loss_guarded,
             6,
         )
 
-        effective_rr = round(expected_passive_profit / max_loss_guarded, 4) if max_loss_guarded > 0 else 0.0
-        is_go = (
-            alpha_net_profit > base_net_profit >= 0.0
-            and expected_passive_profit > 0.0
-            and effective_rr >= min_required_rr
-        )
-        reason = (
-            f"GO: E[PnL]=+${expected_passive_profit:.2f}, MaxProfit=+${alpha_net_profit:.2f}, "
-            f"GuardedMaxLoss=-${max_loss_guarded:.2f}, R/R={effective_rr:.2f}x"
-            if is_go
-            else f"NO_GO: Suboptimal R/R ({effective_rr:.2f}x < {min_required_rr:.2f}x) or negative E[PnL] (${expected_passive_profit:.2f})"
+        effective_rr = round(realistic_expected_profit / max_loss_guarded, 4) if max_loss_guarded > 0 else 0.0
+        is_go = (realistic_expected_profit > 0.0 and max_profit > 0.0 and effective_rr >= min_acceptable_rr)
+
+        summary = (
+            f"{'GO' if is_go else 'NO_GO'} | Cost=${total_cost:.2f} | "
+            f"MaxProfit=+${max_profit:.2f} | RealisticE[PnL]=${realistic_expected_profit:+.2f} | "
+            f"GuardedMaxLoss=-${max_loss_guarded:.2f} (Naive=-${total_cost:.2f}) | R/R={effective_rr:.2f}x"
         )
 
-        return GradedAllocationPlan(
-            budget_usd=round(budget_usd, 6),
-            q_alpha=q_alpha,
-            q_base=q_base,
-            alpha_net_profit=alpha_net_profit,
-            base_net_profit=base_net_profit,
-            expected_passive_profit=expected_passive_profit,
-            endogenous_liquidation_value=total_liq_value,
-            max_loss_guarded=max_loss_guarded,
+        return PositionProofReport(
+            total_cost_usd=total_cost,
+            max_profit_usd=max_profit,
+            min_covered_profit_usd=min_covered_profit,
+            realistic_expected_profit_usd=realistic_expected_profit,
+            endogenous_bid_liquidation_usd=total_bid_liq,
+            max_loss_guarded_usd=max_loss_guarded,
+            naive_maturity_max_loss_usd=total_cost,
             effective_rr=effective_rr,
-            leg_shares=leg_shares,
-            is_viable_go=is_go,
-            verdict_reason=reason,
+            leg_shares={k: round(v, 6) for k, v in leg_shares.items() if v > 0.0},
+            is_profitable_go=is_go,
+            proof_summary=summary,
         )
 
     @staticmethod
-    def verify_monotonic_payout_guard(
-        payout_floor_before: float,
-        payout_floor_after_net_of_spread: float,
+    def verify_monotonic_value_guard(
+        value_before: float,
+        value_after_net_of_spread: float,
     ) -> bool:
-        """Section 5.1: Rebalance / Swing is allowed ONLY if net payout floor strictly increases."""
-        return payout_floor_after_net_of_spread > payout_floor_before + 1e-6
+        """Section 4.1: Rebalance / Swing is permitted ONLY if net value strictly improves after spread."""
+        return value_after_net_of_spread > value_before + 1e-6
 
     @staticmethod
-    def evaluate_unfilled_leg_action(
+    def evaluate_unfilled_leg_reoptimization(
         unfilled_shares: float,
         planned_limit_price: float,
         live_book: OrderbookSnapshot,
         true_prob: float,
-        current_payout_floor: float,
-        max_floor_dilution_tol: float = 0.02,
+        current_expected_profit: float,
     ) -> Tuple[str, Dict[str, float]]:
-        """Section 7.2.3: Chooses between Controlled Taker Completion (A) and Role Reclassification (B)."""
+        """Section 6.2.2: Chooses between Taker completion and capital redistribution purely by net E[PnL] proof."""
         ask_int = integrate_ask_ladder(live_book.asks, unfilled_shares)
         if not ask_int.fully_absorbable:
-            return ("ROLE_RECLASSIFICATION_REDISTRIBUTE", {"released_usdc": round(unfilled_shares * planned_limit_price, 6)})
+            return ("REDISTRIBUTE_OR_WAIT", {"released_usdc": round(unfilled_shares * planned_limit_price, 6)})
 
         extra_cost = max(0.0, ask_int.total_usdc - (unfilled_shares * planned_limit_price))
-        rel_dilution = extra_cost / max(1.0, current_payout_floor)
-
-        if ask_int.vwap_price <= true_prob and rel_dilution <= max_floor_dilution_tol:
+        if ask_int.vwap_price < true_prob and (current_expected_profit - extra_cost) > 0.0:
             return (
                 "CONTROLLED_TAKER_COMPLETION",
                 {
@@ -185,9 +155,9 @@ class MarketStrategyOptimizer:
                 },
             )
         return (
-            "ROLE_RECLASSIFICATION_REDISTRIBUTE",
+            "REDISTRIBUTE_OR_WAIT",
             {
                 "released_usdc": round(unfilled_shares * planned_limit_price, 6),
-                "overheated_ask_vwap": ask_int.vwap_price,
+                "current_ask_vwap": ask_int.vwap_price,
             },
         )
