@@ -13,6 +13,7 @@ from pm_markets_engine import (
     CentralWalletGuard,
     JointStateSpec,
     LadderLevel,
+    MarketScannerEvaluator,
     MarketStrategyOptimizer,
     MarketVault,
     OrderbookSnapshot,
@@ -157,6 +158,53 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         # When both t1 and t2 win simultaneously, gross payout is 2000.0 - 400.0 cost = +1600.0 max profit
         self.assertAlmostEqual(joint_proof.total_cost_usd, 400.0, places=4)
         self.assertAlmostEqual(joint_proof.max_profit_usd, 1600.0, places=4)
+
+        # Verify pre-maturity convergence exit (target_exit_price < 1.0) and live Ask-ladder Taker integral
+        conv_book = OrderbookSnapshot(
+            token_id="t_conv",
+            bids=(LadderLevel(0.19, 2000.0),),
+            asks=(LadderLevel(0.20, 500.0), LadderLevel(0.22, 500.0)),
+            tick_size=0.001,
+            min_order_size=5.0,
+        )
+        conv_spec = OutcomeSpec(
+            token_id="t_conv",
+            name="PreMaturity_Convergence",
+            true_prob=0.80,
+            target_entry_price=0.21,
+            orderbook=conv_book,
+            max_step_adverse_drop=0.01,
+            target_exit_price=0.35,
+            use_live_ask_integral=True,
+        )
+        conv_proof = MarketStrategyOptimizer.prove_position_vector(
+            outcomes=[conv_spec],
+            leg_shares={"t_conv": 1000.0},
+        )
+        # Entry cost via live Ask integral: 500*0.20 + 500*0.22 = 210.0; exit at 0.35 * 1000 = 350.0 -> +140.0 profit
+        self.assertAlmostEqual(conv_proof.total_cost_usd, 210.0, places=4)
+        self.assertAlmostEqual(conv_proof.max_profit_usd, 140.0, places=4)
+        self.assertTrue(conv_proof.is_profitable_go)
+
+        # Verify dual-side (YES + NO) untruncated token extraction
+        tokens = MarketScannerEvaluator.extract_event_tokens(
+            {
+                "markets": [
+                    {
+                        "id": "m1",
+                        "question": "Contender A?",
+                        "active": True,
+                        "closed": False,
+                        "clobTokenIds": '["tok_yes_1", "tok_no_1"]',
+                        "outcomes": '["Yes", "No"]',
+                        "orderPriceMinTickSize": 0.001,
+                        "orderMinSize": 5,
+                    }
+                ]
+            }
+        )
+        self.assertEqual(len(tokens), 2)
+        self.assertEqual({t["outcome_side"] for t in tokens}, {"Yes", "No"})
 
         # Verify exact Ask/Bid ladder integration math
         ask_int = integrate_ask_ladder(

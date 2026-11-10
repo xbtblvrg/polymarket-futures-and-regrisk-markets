@@ -8,6 +8,7 @@ Implements Section 3 and Section 5 of the Master Blueprint (`AGENTS.md`):
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 
@@ -133,6 +134,53 @@ class MarketScannerEvaluator:
         if not items:
             raise LookupError(f"Event slug {event_slug!r} not found on Gamma API.")
         return items[0]
+
+    def discover_active_events(self, page_limit: int = 100, max_pages: int = 20) -> List[Dict[str, Any]]:
+        """Fetches active Polymarket events with pagination so market discovery is never truncated at page 1."""
+        all_events: List[Dict[str, Any]] = []
+        for page_idx in range(max_pages):
+            offset = page_idx * page_limit
+            resp = requests.get(
+                f"{GAMMA_API_BASE}/events",
+                params={"active": "true", "closed": "false", "limit": page_limit, "offset": offset},
+                timeout=self.timeout_sec,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            all_events.extend(batch)
+            if len(batch) < page_limit:
+                break
+        return all_events
+
+    @staticmethod
+    def extract_event_tokens(event_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extracts ALL sub-markets and BOTH YES and NO token IDs without truncation or YES-only bias."""
+        extracted: List[Dict[str, Any]] = []
+        for mkt in event_payload.get("markets", []) or []:
+            if mkt.get("closed") is True or mkt.get("active") is False:
+                continue
+            raw_tokens = mkt.get("clobTokenIds") or "[]"
+            token_ids = json.loads(raw_tokens) if isinstance(raw_tokens, str) else list(raw_tokens)
+            raw_outcomes = mkt.get("outcomes") or '["Yes", "No"]'
+            outcomes = json.loads(raw_outcomes) if isinstance(raw_outcomes, str) else list(raw_outcomes)
+            tick = mkt.get("orderPriceMinTickSize") or mkt.get("minimum_tick_size")
+            min_sz = mkt.get("orderMinSize") or mkt.get("minimum_order_size")
+            for idx, tid in enumerate(token_ids):
+                side_label = outcomes[idx] if idx < len(outcomes) else f"Outcome_{idx}"
+                extracted.append(
+                    {
+                        "market_id": str(mkt.get("id", "")),
+                        "question": str(mkt.get("question", "")),
+                        "group_item_title": str(mkt.get("groupItemTitle") or mkt.get("question") or ""),
+                        "outcome_side": str(side_label),
+                        "token_id": str(tid),
+                        "tick_size": float(tick) if tick is not None else None,
+                        "min_order_size": float(min_sz) if min_sz is not None else None,
+                    }
+                )
+        return extracted
 
     def fetch_orderbook(
         self,

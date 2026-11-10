@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .scanner_evaluator import OrderbookSnapshot, integrate_bid_ladder
+from .scanner_evaluator import OrderbookSnapshot, integrate_ask_ladder, integrate_bid_ladder
 
 
 @dataclass(frozen=True)
@@ -27,15 +27,18 @@ class OutcomeSpec:
     target_entry_price: float
     orderbook: OrderbookSnapshot
     max_step_adverse_drop: float = 0.0  # Empirical max single-window price drop (\Delta p_i)
+    target_exit_price: float = 1.0  # Supports both hold-to-maturity ($1.00) and pre-maturity convergence exits (< $1.00)
+    use_live_ask_integral: bool = False  # When True (Taker entry), computes exact entry cost from live Ask ladder
 
 
 @dataclass(frozen=True)
 class JointStateSpec:
-    r"""General world-state specification `\omega \in \Omega` for non-mutually-exclusive or multi-resolution markets."""
+    r"""General world-state specification `\omega \in \Omega` for non-mutually-exclusive or intermediate-exit markets."""
 
     state_id: str
     probability: float
-    winning_token_ids: Tuple[str, ...]
+    winning_token_ids: Tuple[str, ...] = ()
+    token_valuations: Optional[Dict[str, float]] = None  # Optional exact per-share value V_i(\omega) \in [0, 1] in state \omega
 
 
 @dataclass(frozen=True)
@@ -78,8 +81,19 @@ class MarketStrategyOptimizer:
                 raise ValueError(f"Invalid probability {o.true_prob} for outcome {o.token_id!r}.")
             if not (0.0 < o.target_entry_price < 1.0):
                 raise ValueError(f"Invalid target_entry_price {o.target_entry_price} for outcome {o.token_id!r}.")
+            if not (0.0 < o.target_exit_price <= 1.0):
+                raise ValueError(f"Invalid target_exit_price {o.target_exit_price} for outcome {o.token_id!r}.")
 
-        total_cost = sum(leg_shares[o.token_id] * o.target_entry_price for o in active_outcomes)
+        total_cost = 0.0
+        for o in active_outcomes:
+            sh = leg_shares[o.token_id]
+            if o.use_live_ask_integral:
+                ask_int = integrate_ask_ladder(o.orderbook.asks, sh)
+                if not ask_int.fully_absorbable:
+                    raise ValueError(f"Ask ladder for {o.token_id!r} cannot absorb {sh} shares as Taker.")
+                total_cost += ask_int.total_usdc
+            else:
+                total_cost += sh * o.target_entry_price
         total_cost = round(total_cost, 6)
 
         # Endogenous Bid-Ladder Liquidation Integral: \sum_i \int_0^{q_i} Bid_i(u) du
@@ -110,13 +124,22 @@ class MarketStrategyOptimizer:
             prob_sum = sum(s.probability for s in joint_states)
             if prob_sum > 1.0 + 1e-6 or any(s.probability < 0.0 for s in joint_states):
                 raise ValueError(f"Invalid joint_states probability distribution (sum={prob_sum:.6f}).")
-            active_ids = {o.token_id for o in active_outcomes}
+            active_map = {o.token_id: o for o in active_outcomes}
             covered_states_profits: List[Tuple[float, float]] = []
             uncovered_prob = max(0.0, 1.0 - prob_sum)
             for s in joint_states:
-                gross_payout = sum(
-                    leg_shares[tid] for tid in s.winning_token_ids if tid in active_ids
-                )
+                if s.token_valuations is not None:
+                    gross_payout = sum(
+                        leg_shares[tid] * float(val)
+                        for tid, val in s.token_valuations.items()
+                        if tid in active_map
+                    )
+                else:
+                    gross_payout = sum(
+                        leg_shares[tid] * active_map[tid].target_exit_price
+                        for tid in s.winning_token_ids
+                        if tid in active_map
+                    )
                 if gross_payout > 0.0:
                     covered_states_profits.append((s.probability, round(gross_payout - total_cost, 6)))
                 else:
@@ -141,7 +164,7 @@ class MarketStrategyOptimizer:
                     "pass `joint_states` for non-mutually-exclusive markets."
                 )
             net_profits_if_win = {
-                o.token_id: round(leg_shares[o.token_id] - total_cost, 6)
+                o.token_id: round((leg_shares[o.token_id] * o.target_exit_price) - total_cost, 6)
                 for o in active_outcomes
             }
             max_profit = max(net_profits_if_win.values())
