@@ -155,9 +155,16 @@ class MarketStrategyOptimizer:
             else:
                 max_profit = max(p for _, p in covered_states_profits)
                 min_pos_profit = min(p for _, p in covered_states_profits)
+                if min_pos_profit < 0.0 and uncovered_maturity_loss_fraction > 0.0:
+                    max_loss_guarded = max(
+                        max_loss_guarded,
+                        round(abs(min_pos_profit) * min(1.0, uncovered_maturity_loss_fraction), 6),
+                    )
+                # By Probability Conservation & Optional Stopping, expected profit on uncovered states loses total_cost
+                # at maturity unless joint_states explicitly specify intermediate liquidation payoffs in token_valuations.
                 realistic_expected_profit = round(
                     sum(prob * net_p for prob, net_p in covered_states_profits)
-                    - uncovered_prob * max_loss_guarded,
+                    - uncovered_prob * total_cost,
                     6,
                 )
         else:
@@ -174,9 +181,11 @@ class MarketStrategyOptimizer:
             max_profit = max(net_profits_if_win.values())
             min_pos_profit = min(net_profits_if_win.values())
             uncovered_prob = max(0.0, 1.0 - covered_prob_sum)
+            # Exact fundamental expected profit: \sum_i p_i * (q_i * V_exit,i - total_cost) - (1 - \sum_i p_i) * total_cost
+            # = \sum_i (q_i * p_i * V_exit,i) - total_cost. Never adds phantom profit from (total_cost - max_loss_guarded).
             realistic_expected_profit = round(
                 sum(o.true_prob * net_profits_if_win[o.token_id] for o in active_outcomes)
-                - uncovered_prob * max_loss_guarded,
+                - uncovered_prob * total_cost,
                 6,
             )
 
@@ -277,17 +286,23 @@ class MarketStrategyOptimizer:
                 vec_eq = {item[2].token_id: equal_shares for item in prefix}
                 candidate_vectors.append(vec_eq)
 
-        reports = [
-            MarketStrategyOptimizer.prove_position_vector(
-                outcomes=outcomes,
-                leg_shares=vec,
-                joint_states=joint_states,
-                has_discontinuous_gap_risk=has_discontinuous_gap_risk,
-                min_acceptable_rr=min_acceptable_rr,
-                uncovered_maturity_loss_fraction=uncovered_maturity_loss_fraction,
-            )
-            for vec in candidate_vectors
-        ]
+        reports: List[PositionProofReport] = []
+        for vec in candidate_vectors:
+            try:
+                reports.append(
+                    MarketStrategyOptimizer.prove_position_vector(
+                        outcomes=outcomes,
+                        leg_shares=vec,
+                        joint_states=joint_states,
+                        has_discontinuous_gap_risk=has_discontinuous_gap_risk,
+                        min_acceptable_rr=min_acceptable_rr,
+                        uncovered_maturity_loss_fraction=uncovered_maturity_loss_fraction,
+                    )
+                )
+            except ValueError:
+                continue
+        if not reports:
+            raise ValueError("No candidate basket vector could be absorbed by the live orderbooks.")
         reports.sort(
             key=lambda r: (r.is_profitable_go, r.effective_rr, r.realistic_expected_profit_usd, -r.max_loss_guarded_usd),
             reverse=True,
