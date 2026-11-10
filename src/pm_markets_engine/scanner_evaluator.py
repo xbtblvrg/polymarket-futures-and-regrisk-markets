@@ -1,4 +1,4 @@
-"""Live CLOB Orderbook Integral & Market Evaluator (`MarketScannerEvaluator`).
+r"""Live CLOB Orderbook Integral & Market Evaluator (`MarketScannerEvaluator`).
 
 Implements Section 3.8.1, Section 3.8.2, and Section 6.1 of the Master Blueprint:
 - Exact Ask-ladder integration for entry slippage and VWAP.
@@ -87,7 +87,7 @@ def integrate_ask_ladder(asks: Tuple[LadderLevel, ...], target_shares: float) ->
 
 
 def integrate_bid_ladder(bids: Tuple[LadderLevel, ...], held_shares: float) -> BookIntegralResult:
-    """Computes exact endogenous liquidation value (`\int_0^{q_i} Bid_i(u) du`) across descending Bid levels."""
+    r"""Computes exact endogenous liquidation value (`\int_0^{q_i} Bid_i(u) du`) across descending Bid levels."""
     if held_shares <= 0.0:
         return BookIntegralResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, True)
     sorted_bids = sorted(bids, key=lambda lvl: lvl.price, reverse=True)
