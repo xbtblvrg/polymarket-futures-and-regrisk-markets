@@ -69,6 +69,7 @@ class MarketStrategyOptimizer:
         leg_shares: Dict[str, float],
         joint_states: Optional[List[JointStateSpec]] = None,
         has_discontinuous_gap_risk: bool = False,
+        uncovered_maturity_loss_fraction: Optional[float] = None,
         min_acceptable_rr: float = 0.0,
     ) -> PositionProofReport:
         """Proves the 4 mandatory metrics (MaxLoss_guarded, MaxProfit, Realistic E[PnL], R/R) for any position vector `q`."""
@@ -118,6 +119,9 @@ class MarketStrategyOptimizer:
             if max_loss_guarded <= 0.0:
                 min_tick_friction = sum(leg_shares[o.token_id] * o.orderbook.tick_size for o in active_outcomes)
                 max_loss_guarded = round(max(1e-6, min_tick_friction), 6)
+            if uncovered_maturity_loss_fraction is not None:
+                frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
+                max_loss_guarded = round(max(max_loss_guarded, total_cost * frac), 6)
 
         # Evaluate state-space payoffs (either general joint states \Omega or mutually exclusive partition)
         if joint_states is not None:
