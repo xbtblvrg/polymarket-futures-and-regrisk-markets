@@ -14,6 +14,7 @@ A rendszer egyetlen legfőbb küldetése: **minden egyes beküldött vagy vizsg�
 1. **Minden Nemű Túlirányító, Megkötő és Befolyásoló Anchoring Abszolút Tilalma (`Total Ban on Structural, Numeric & Template Anchoring`):**
    - A rendszer a kezdeti, nyílt fejlődési fázisában van: **szigorúan tilos bármilyen előre rögzített pozícióépítési sablont, kötelező kosárméretet, előre definiált halmaz-sémát, fix százalékos küszöböt, zárójeles példafelsorolást vagy múltbeli piacokról átmásolt receptet ráerőltetni egy új piacra.**
    - Minden újonnan vizsgált piac teljesen tiszta lappal (`Tabula Rasa`), önálló matematikai és mikrostrukturális problémaként indul. Az AI-nak teljes kognitív és módszertani szabadsága van — és egyben kötelessége —, hogy az adott piac saját elszámolási szabályából, hátralévő időtartamából, könyvmélységéből és fundamentális folyamatából **első elvekből (`first principles`) vezesse le a lehető legjobb, profitábilis megoldást**.
+   - **Tapasztalati Merítés vs. Eltérítés Tilalma (`Non-Binding Experience vs. Zero Diversion`):** A korábban vizsgált piacokból és matematikai levezetésekből szerzett tapasztalat kizárólag **nem-kötő módszertani merítésként és mikrostrukturális éberségként** használható fel, de **soha nem terelheti el, nem korlátozhatja és nem befolyásolhatja** az új piac szabad, első-elvű vizsgálatát.
 
 2. **A Profitábilis Megoldás Megtalálása Mindenekfelett — Valós `Risk/Reward` Optimalizáció (`Relentless Solution Discovery & R/R Maximization`):**
    - Új piac beadásakor kizárólag a fő gazdasági és matematikai célok érvényesek:

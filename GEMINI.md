@@ -34,6 +34,7 @@ Read the current files and live market/orderbook state before making claims abou
 - **Zero Structural, Numeric, or Template Anchoring (`1.1.1` & `2026-11-04 User Directive`):**
   - Never force pre-baked strategy recipes, fixed basket sizes, rigid set partitions, hardcoded constants, or parenthetical example lists onto any market or prompt.
   - Every new market starts as a completely blank slate (`Tabula Rasa`). Dedicate full cognitive freedom from first principles to finding the highest `Risk/Reward` profitable solution if one exists on that specific market.
+  - Prior mathematical and microstructural lessons may serve strictly as non-binding analytical awareness (to avoid liquidity traps or execution pitfalls), never as a diverting bias, constraint, or preset template.
 - **Zero Memory — Mandatory Live Empirical & Mathematical Proof (`1.1.3` & `Section 3`):**
   - Never rely on LLM memory or assumptions. Fetch all orderbooks (`Ask` & `Bid` ladders, `tick_size`, `min_order_size`), resolution rules, remaining duration ($T - t_0$), and external fundamental facts live without truncation.
   - Prove the 4 mandatory metrics (`MaxLoss_guarded` from the live `Bid` integral $\int_0^{q_i} \text{Bid}_i(u)\,du$, `MaxProfit`, `Realistic E[PnL]` consistent with $\sum P_i = 1$, and `Effective R/R`) for every candidate solution. If a realistic, high-`R/R` profitable solution exists, present and execute it (`GO`); if live mathematical proof shows that remaining duration or price compression precludes a realistic high-`R/R` solution, report a proven `NO-GO`.
