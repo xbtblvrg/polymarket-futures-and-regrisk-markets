@@ -1,0 +1,45 @@
+{
+  "version": "2026-11-10.standalone-pm-markets-v1",
+  "enabled": true,
+  "primary": "agy",
+  "developer": "agy",
+  "final_reviewer": "agy",
+  "providers": {
+    "codex": {
+      "enabled": true,
+      "binary": "/Users/belavarga/.local/bin/codex",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "medium",
+      "role": "secondary",
+      "idle_timeout": 60.0,
+      "max_hard_ceiling": 600.0
+    },
+    "claude": {
+      "enabled": true,
+      "binary": "/Users/belavarga/.local/bin/claude",
+      "model": "claude-opus-5-5",
+      "role": "secondary",
+      "idle_timeout": 60.0,
+      "max_hard_ceiling": 600.0
+    },
+    "agy": {
+      "enabled": true,
+      "binary": "/Users/belavarga/.local/bin/agy",
+      "model": "gemini-3.8-flash-high",
+      "role": "primary"
+    },
+    "grok": {
+      "enabled": true,
+      "binary": "/Users/belavarga/.local/bin/grok",
+      "model": "grok-4.7",
+      "reported_model": "grok-4.7-build",
+      "role": "tertiary",
+      "idle_timeout": 45.0,
+      "max_hard_ceiling": 300.0
+    }
+  },
+  "authority": "Google Antigravity (agy) is the primary quant brain, lead architect, developer, and final supervisor; Codex (gpt-6-astra) and Claude (claude-opus-5-5) serve as secondary quantitative and structural specialists; Grok (grok-4.7) serves as tertiary red-team auditor. Helper outputs are untrusted advisory inputs until agy verifies their SHA-256 hash and records an explicit disposition.",
+  "max_parallel_per_provider": 1,
+  "zero_paid_external_sources": true,
+  "zero_prompt_anchoring": true
+}

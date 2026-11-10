@@ -311,11 +311,30 @@ Annak érdekében, hogy a közös Polymarket tárcán (`POLYMARKET_PROXY`) keres
    - Önkényes, statikusan beégetett ársapkák, lépcsőzetes diszkrét szűrők vagy merev kosárméret-állandók használata szigorúan tilos. Minden árazási, méretezési és kockázati paramétert folytonos matematikai függvényként kell levezetni az élő könyv-integrálokból, az árlépésközből és a valós valószínűségi eloszlásokból.
 3. **Zéró Fizetős Külső Adatforrás (`$0.00 External Data Cost`) és Maximális Multi-AI Kognitív Tőkeáttétel:**
    - Bármilyen fizetős külső adatforrásra, kereskedelmi odds- vagy adatszolgáltatásra való előfizetés vagy annak javaslása **szigorúan tilos (`$0.00` külső adatköltség)**. Kizárólag ingyenes, nyilvános, hivatalos API-k (Polymarket Gamma & CLOB API, hivatalos nyilvános eredmény- és tényadat-végpontok) használhatók.
-   - **Multi-AI Quant Council:** A kvantitatív elemzés és architektúra-fejlesztés során a 4 AI agy kognitív erejét kell kombinálni:
-     - **Gemini Antigravity (`agy`):** Elsődleges kvantitatív agy, vezető rendszermérnök és végső kiadási hatóság, állandó autonóm fejlesztési és hibajavítási felhatalmazással (`2026-10-13`, `2026-10-17`).
-     - **Claude:** Folyamat- és ágazat-specifikus strukturális mechanika, állapotváltozási dinamika.
-     - **Codex:** Matematikai kernel-formulák, kalibrációs görbék, egzakt statisztikai bizonyítás.
-     - **Grok:** Red-team ellenoldali auditor, túlillesztés (`overfit`) és likvidációs stressz-tesztelés.
+   - **Multi-AI Quant Council Hierarchia (`2026-10-06`, `2026-10-13`, `2026-10-17`):** A kvantitatív elemzés és architektúra-fejlesztés során a 4 fizetett AI rendszer kognitív erejét kell kombinálni:
+     - **Gemini Antigravity (`agy` — `/Users/belavarga/.local/bin/agy`):** Elsődleges kvantitatív agy (`primary`), vezető rendszermérnök és végső kiadási hatóság, állandó autonóm fejlesztési és hibajavítási felhatalmazással.
+     - **OpenAI Codex (`gpt-6-astra` — `/Users/belavarga/.local/bin/codex`):** Másodlagos/helyettes (`secondary / deputy`) matematikai modellező: sztochasztikus kernel-formulák, kalibrációs egyenletek, egzakt statisztikai bizonyítás és kód-szintézis.
+     - **Anthropic Claude (`claude-opus-5-5` — `/Users/belavarga/.local/bin/claude`):** Másodlagos (`secondary`) tartományi és strukturális specialista: folyamat-mechanika, állapotváltozási dinamika és 1:1 kód-szintézis tartalék (`fallback`), ha a Codex foglalt vagy nem elérhető.
+     - **xAI Grok (`grok-4.7` — `/Users/belavarga/.local/bin/grok`):** Harmadlagos (`tertiary`) red-team ellenoldali auditor: túlillesztés (`overfit`), likvidációs kockázat és peremfeltétel-stressztesztelés.
+   - **A `gpt-6-astra` (`codex`) és `claude-opus-5-5` (`claude`) Modellek Szigorú CLI Használati Szerződése (`config/ai_council_contract.json` & `src/pm_markets_engine/ai_council_cli.py`):**
+     - **1. Fix, Shell-Injekciótól Mentes `argv` Meghívás és Izolált Munkakönyvtár (`Empty CWD & Sandbox Boundary`):** A segéd-modellek meghívása kizárólag fix argumentum-tömbbel (`subprocess.Popen(argv, shell=False)`), üres ideiglenes munkakönyvtárban (`empty cwd`) és szükség esetén `/usr/bin/sandbox-exec` védelemmel történhet; a segéd-CLI-k soha nem olvashatják vagy írhatják közvetlenül a projekt SQLite főkönyveit (`data/pm_markets/*.sqlite3`), a `.env` fájlt vagy a CLOB végrehajtót:
+       - **`gpt-6-astra` (`codex` CLI) kötelező meghívási szignatúra:**
+         ```text
+         /Users/belavarga/.local/bin/codex exec --sandbox read-only --skip-git-repo-check --ephemeral --color never --model gpt-6-astra "<PROMPT>"
+         ```
+         Engedélyezett környezeti változók: `HOME`, `PATH`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `OPENAI_API_KEY`, `CODEX_HOME`.
+       - **`claude-opus-5-5` (`claude` CLI) kötelező meghívási szignatúra (a `<PROMPT>` `stdin`-en keresztül átadva):**
+         ```text
+         /Users/belavarga/.local/bin/claude --print --safe-mode --restricted --tools "" --strict-mcp-config --no-session-persistence --output-format json --model claude-opus-5-5
+         ```
+         Engedélyezett környezeti változók: `HOME`, `PATH`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CONFIG_DIR`.
+       - **`grok-4.7` (`grok` CLI) kötelező meghívási szignatúra:**
+         ```text
+         /Users/belavarga/.local/bin/grok --prompt-file <brief.txt> --tools "" --no-subagents --no-memory --disable-web-search --permission-mode dontAsk --deny "*" --max-turns 1 --output-format json --verbatim --model grok-4.7
+         ```
+         Engedélyezett környezeti változók: `HOME`, `PATH`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `XAI_API_KEY`.
+     - **2. Szolgáltatónkénti Kizárólagos `flock` Zár és Streaming Watchdog:** Minden CLI szolgáltatóhoz dedikált fájlzár (`data/pm_markets/ai_locks/<provider>.lock`, `max_parallel_per_provider = 1`) tartozik. A folyamatfigyelő (`Streaming Watchdog`) megkülönbözteti az aktív token-streamelést az üresjárati lefagyástól (`idle_timeout` vs. `max_hard_ceiling`), és kilépéskor vagy időtúllépéskor a teljes folyamatcsoportot (`os.killpg(pgid, SIGTERM/SIGKILL)`) felszámolja.
+     - **3. Kötelező Modell-Azonosító, Tool-Tilalom és SHA-256 Diszpozíció-Verifikáció:** A válasz csak akkor érvényes (`received_unreviewed`), ha `returncode == 0`, a visszaigazolt modell pontosan `gpt-6-astra` (illetve `claude-opus-5-5` a `modelUsage` mezőben), nem történt eszköz- vagy szubágens-hívás (`permission_denials == []`, `subagent_stats.spawned == 0`), és az eredményt az elsődleges agy (`agy`) SHA-256 lenyomattal ellátva felülvizsgálja (`used`, `partly_used`, `rejected`). Segéd-modell önállóan soha nem hagyhat jóvá tőkeallokációt vagy CLOB megbízást.
 4. **Az Anchoring és Példafelsorolási Torzítás Szigorú Rendszerszintű Tilalma (`Zero Prompt Anchoring & First-Principles Cognitive Freedom — 2026-11-04 User Directive`):**
    - Szigorúan tilos bármilyen AI tanácsadói, kutatási, modellezési, piacértékelési vagy kódgenerálási promptban és specifikációban előre lehorgonyozni (`anchoring`) a modellt konkrét megoldási receptekkel, példafelsorolásokkal vagy zárójeles sugallatokkal. A transzformátor modellek Attention mechanizmusa a példákban megadott szavakra összpontosítja a valószínűségi tömeget, funkcionális rögzültséget (`Functional Fixedness`) okozva.
    - A promptoknak és elemzési kereteknek **kizárólag a nyers empirikus tényeket, megfigyelt élő adatokat, a folyamat strukturális patológiáját és az objektív matematikai célt** szabad tartalmazniuk, teljes kognitív szabadságot biztosítva az első elvekből (`first-principles`) történő levezetéshez. Szigorúan tilos továbbá az álszintézis (amikor statikus `if-else` sablon bírálja felül a valós matematikai levezetést).

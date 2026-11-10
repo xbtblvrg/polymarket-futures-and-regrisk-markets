@@ -1,11 +1,13 @@
 """Anti-tautological mathematical and architectural invariant tests for `pm_markets_engine`."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from pm_markets_engine import (
+    AICouncilCLI,
     AutonomousMarketsExecutor,
     AutonomousMarketsGuardian,
     CentralWalletGuard,
@@ -15,8 +17,12 @@ from pm_markets_engine import (
     OrderbookSnapshot,
     OutcomeCandidate,
     TargetLegPlan,
+    build_cli_command,
+    decode_cli_response,
     integrate_ask_ladder,
     integrate_bid_ladder,
+    validate_helper_reviews,
+    validate_zero_anchoring_prompt,
 )
 
 
@@ -210,6 +216,102 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
             live_book=live_book,
         )
         self.assertAlmostEqual(new_peg or 0.0, 0.246, places=6)
+
+    def test_gpt_6_astra_and_claude_opus_5_5_cli_contract(self) -> None:
+        """Verifies Section 8.3 & 8.4: exact CLI contract for gpt-6-astra and claude-opus-5-5, zero-tool & zero-anchoring."""
+        council = AICouncilCLI(lock_dir=self.data_dir / "ai_locks")
+        codex_cfg = council.get_provider_config("codex")
+        claude_cfg = council.get_provider_config("claude")
+
+        self.assertEqual(codex_cfg["model"], "gpt-6-astra")
+        self.assertEqual(claude_cfg["model"], "claude-opus-5-5")
+
+        clean_prompt = "Deduce the optimal share allocation vector from first principles given the observed orderbook integral."
+        validate_zero_anchoring_prompt(clean_prompt)
+
+        # Anchored prompt with parenthetical examples must be rejected
+        with self.assertRaises(ValueError):
+            validate_zero_anchoring_prompt("Model the distribution (e.g. Poisson or Copula) for this market.")
+
+        argv_codex, _, stdin_codex = build_cli_command("codex", codex_cfg, self.data_dir, clean_prompt)
+        self.assertEqual(
+            argv_codex[:9],
+            [
+                "/Users/belavarga/.local/bin/codex",
+                "exec",
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--color",
+                "never",
+                "--model",
+            ],
+        )
+        self.assertEqual(argv_codex[9], "gpt-6-astra")
+        self.assertIsNone(stdin_codex)
+
+        argv_claude, _, stdin_claude = build_cli_command("claude", claude_cfg, self.data_dir, clean_prompt)
+        self.assertEqual(
+            argv_claude,
+            [
+                "/Users/belavarga/.local/bin/claude",
+                "--print",
+                "--safe-mode",
+                "--restricted",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--no-session-persistence",
+                "--output-format",
+                "json",
+                "--model",
+                "claude-opus-5-5",
+            ],
+        )
+        self.assertEqual(stdin_claude, clean_prompt)
+
+        # Verify model identity & zero-tool verification in decode_cli_response
+        claude_ok_stdout = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "permission_denials": [],
+                "subagent_stats": {"spawned": 0},
+                "result": "First-principles allocation verified.",
+                "modelUsage": {"claude-opus-5-5": {"canonicalModel": "claude-opus-5-5"}},
+            }
+        )
+        st_ok, ans_ok = decode_cli_response(
+            "claude",
+            {"returncode": 0, "state": None, "stdout": claude_ok_stdout, "stderr": ""},
+            expected_model="claude-opus-5-5",
+        )
+        self.assertEqual(st_ok, "received_unreviewed")
+        self.assertEqual(ans_ok, "First-principles allocation verified.")
+
+        # Tool violation must be rejected
+        claude_bad_tool = json.dumps(
+            {
+                "type": "result",
+                "is_error": False,
+                "permission_denials": ["Bash"],
+                "result": "Attempted tool use",
+                "modelUsage": {"claude-opus-5-5": {"canonicalModel": "claude-opus-5-5"}},
+            }
+        )
+        st_bad, _ = decode_cli_response(
+            "claude",
+            {"returncode": 0, "state": None, "stdout": claude_bad_tool, "stderr": ""},
+            expected_model="claude-opus-5-5",
+        )
+        self.assertEqual(st_bad, "unexpected_tool_activity")
+
+        # Verify SHA-256 helper review disposition check
+        advice = [{"id": "adv_1", "sha256": "abc123"}]
+        valid_review = [{"id": "adv_1", "sha256": "abc123", "disposition": "used", "reason": "Verified integral proof"}]
+        self.assertEqual(len(validate_helper_reviews(valid_review, advice)), 1)
 
 
 if __name__ == "__main__":
