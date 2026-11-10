@@ -1,7 +1,7 @@
 # Autonóm Polymarket Multi-Option & Futures Quant Engine — Mesterterv (Master Blueprint)
 
 **Frissítve:** 2026-11-10  
-**Státusz:** Általánosított, Anchoring-Mentes Matematikai és Architektúrális Specifikáció (a meglévő napi sportfogadási motor érintetlenül fut tovább)
+**Státusz:** Általánosított, Anchoring-Mentes Matematikai és Architektúrális Specifikáció (`100% Standalone Repository`)
 
 ---
 
@@ -31,17 +31,17 @@ A rendszer alapvető matematikai és stratégiai küldetése: **olyan többopci�
 
 ---
 
-## 2. Technikai, Repository- és Szabályrendszeri Szétválasztás
+## 2. Önálló Rendszerarchitektúra és Teljes Függetlenség (`Standalone Repository Architecture`)
 
-| Dimenzió | Meglévő Napi Sportfogadási Engine (`Betting_tips_engine`) | Új Autonóm Polymarket Multi-Market & Futures Engine (`polymarket-futures-and-regrisk-markets`) |
-| :--- | :--- | :--- |
-| **Git Repository** | `Betting_tips_engine` (100% érintetlenül fut tovább) | **Saját, önálló Git repository:** `git@github.com:xbtblvrg/polymarket-futures-and-regrisk-markets.git` |
-| **Fő feladat** | Rövid lejáratú napi mérkőzés-fogadások | Többopciós (`NegRisk` / Futures / Korlát / Egyedi) piacok autonóm építése és végigkereskedése |
-| **Időhorizont** | Rövid távú mérkőzés-ablak | Tetszőleges (rövidtől több ciklusig tartó lejárati létra) |
-| **Tétkorlátok** | Egyedi mérkőzésenkénti korlátos Frakcionális Kelly | **Nincs egyedi tétplafon**; piac-specifikus, névre szóló tőkeallokáció ($B_{m,0}$ kezdőtőke + $\Delta B_{m,t}$ rátöltések) |
-| **Végrehajtási mód** | Stake-en manuális (`assumed manual`) + párhuzamos PM | **100% Autonóm, Piaconként Izolált CLOB végrehajtás** (`src/pm_markets_engine/`) |
-| **Adatbázis** | `Betting_tips_engine/data/engine.sqlite3` (100% érintetlen) | Piaconként különálló SQLite adatbázis az új repóban: `data/pm_markets/<market_slug>.sqlite3` + `_wallet_guard.sqlite3` |
-| **Vezérlés & Szabályzat** | Saját szabályzat (érintetlenül fut tovább) | Chat-vezérelt jóváhagyás + jelen `Master Blueprint` (`Zero-Anchoring & Zero-Memory` alkotmány) |
+| Dimenzió | Autonóm Polymarket Multi-Market & Futures Engine (`polymarket-futures-and-regrisk-markets`) |
+| :--- | :--- |
+| **Git Repository** | **100% önálló, dedikált Git repository:** `git@github.com:xbtblvrg/polymarket-futures-and-regrisk-markets.git` |
+| **Fő feladat** | Többopciós (`NegRisk`), határidős (`Futures`), korlát- (`Barrier`) és egyedi Polymarket CLOB piacok autonóm építése és végigkereskedése |
+| **Időhorizont** | Tetszőleges (rövidtől több ciklusig tartó lejárati létra, $[t_0, T]$) |
+| **Tőkeallokáció** | **Nincs statikus egyedi tétplafon**; piac-specifikus, névre szóló tőkeallokáció ($B_{m,0}$ kezdőtőke + $\Delta B_{m,t}$ rátöltések) |
+| **Végrehajtási mód** | **100% Autonóm, Piaconként Izolált CLOB végrehajtás** (`src/pm_markets_engine/`) |
+| **Adatbázis-Izoláció** | Piaconként különálló SQLite adatbázis: `data/pm_markets/<market_slug>.sqlite3` + központi tárca-zsilip: `data/pm_markets/_wallet_guard.sqlite3` |
+| **Vezérlés & Szabályzat** | Chat-vezérelt jóváhagyás + jelen `Master Blueprint` (`Zero-Anchoring & Reality-First` alkotmány) |
 
 ---
 
@@ -243,9 +243,9 @@ flowchart TD
 
 ---
 
-## 7. Teljesen Új, Önálló Polymarket Futures/Markets Executor (`src/pm_markets_engine/`), 3-Utas On-Chain Verifikáció és Adaptív Megbízás-Kezelés
+## 7. Önálló Polymarket Futures/Markets Executor (`src/pm_markets_engine/`), 3-Utas On-Chain Verifikáció és Adaptív Megbízás-Kezelés
 
-A rendszer **nem használja és nem osztja meg** a régi napi sportfogadási motorhoz írt `src/betting_engine/polymarket_executor.py` modult (amely egyedi mérkőzés-fogadási tétkorlátokra, `SegmentScoreboard` diplomákra és statikus ár-intervallumokra épült). Ehelyett egy **100%-ban új, nulláról megírt, önálló végrehajtó motort (`src/pm_markets_engine/pm_markets_executor.py`)** kap, amely közvetlenül a `py_clob_client_v2.ClobClient` L1/L2 protokolljára csatlakozik, és általánosított többopciós / futures / egyedi Polymarket kampányokra van tervezve. A teljes irányítás **kizárólag a chat-felületen keresztül** történik.
+A rendszer egy **100%-ban önálló, nulláról megírt végrehajtó motort (`src/pm_markets_engine/pm_markets_executor.py`)** használ, amely közvetlenül a `py_clob_client_v2.ClobClient` L1/L2 protokolljára csatlakozik, és általánosított többopciós / futures / egyedi Polymarket kampányokra van tervezve. A teljes irányítás **kizárólag a chat-felületen keresztül** történik.
 
 ### 7.1. A 3-Utas Atomi Igazság-Egyeztetés (`Three-Way Truth Reconciliation Loop`)
 A rendszer **soha nem bízik vakon** abban, hogy egy beküldött megbízás (`post_order`) valóban teljesült. Minden $m \in \mathcal{M}$ piac minden művelete előtt, közben és után három független adatforrást egyeztet össze:
@@ -297,4 +297,4 @@ Annak érdekében, hogy a közös Polymarket tárcán (`POLYMARKET_PROXY`) keres
      2. **Megbízás beküldésekor (`OrderCost` értékben az $m$ piacon)** ellenőrzi, hogy az összeg az $m$ piac saját szabad kasszájában ($\text{OrderCost} \le \text{AvailableCash}_m(t)$) ÉS a többi piac nyitott `Maker` fedezete feletti fizikai tárca-egyenlegen ($\text{OrderCost} + \sum_{k \in \mathcal{M}} \text{OpenBuyLocks}_k(t) \le \text{WalletUSDC}_{\text{on-chain}}(t)$) egyaránt megvan-e. Így egyetlen $m'$ piac sem költheti el egy másik $m$ piac nyitott `Maker` limit megbízásának a fedezetét.
    - **B) Globális `token_id` Kizárólagossági Zár (`Token Ownership Lock`):** A `_wallet_guard` tárolja a `token_ownership(token_id PRIMARY KEY, market_slug NOT NULL)` regisztert. Egy adott `ERC-1155 token_id` egyszerre csak egyetlen piac adatbázisához tartozhat, és egy piac kizárólag a saját `order_id` azonosítóit törölheti (`client.cancel_all()` és `cancel_market_orders()` meghívása kód-szinten tiltott).
    - **C) Szekvenciális Végrehajtási Mutex (`flock` Szinkronizáció és Egyetlen Multiplexelt Őrszem):** Ahelyett, hogy több különálló háttérfolyamat párhuzamosan versengene ugyanazon az API-kulcson a CLOB végpontokért (`Rate-Limit` és `Balance Race Condition`), **egyetlen központi háttér-ciklus (`pm_markets_guardian`)** járja végig sorban, atomi fájlzár (`flock`) mellett a különálló `data/pm_markets/*.sqlite3` adatbázisokat.
-   - **D) Teljes Függetlenség a Párhuzamosan Futó `betting_engine`-től (`Zero Interference with Parallel Betting Engine`):** A meglévő napi sportfogadási motor (`betting_engine`) teljesen függetlenül, párhuzamosan fut és kereskedik tovább — ahhoz a rendszerhez soha nem nyúlunk hozzá, nem állítjuk le és nem korlátozzuk. Az új, önálló `src/pm_markets_engine/` kizárólag a saját `data/pm_markets/<market_slug>.sqlite3` adatbázisaiban regisztrált piacokat, saját `token_id`-kat, saját `order_id`-kat és a saját névre szóló keretét (`AvailableCash_m`) kezeli.
+   - **D) Külső Tárca-Folyamatok Teljes Érintetlensége (`Zero External Process Interference`):** A `src/pm_markets_engine/` kizárólag a saját `data/pm_markets/<market_slug>.sqlite3` adatbázisaiban regisztrált piacokat, saját `token_id`-kat, saját `order_id`-kat és a saját névre szóló keretét (`AvailableCash_m`) kezeli; a közös tárcán esetlegesen párhuzamosan futó bármely külső rendszerhez, annak megbízásaihoz vagy tőkéjéhez soha nem nyúl hozzá.
