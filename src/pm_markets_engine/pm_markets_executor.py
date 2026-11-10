@@ -98,7 +98,13 @@ class AutonomousMarketsExecutor:
                 funder=self.proxy_address,
                 signature_type=1,
             )
-            if hasattr(c, "create_or_derive_api_creds"):
+            if hasattr(c, "derive_api_key"):
+                try:
+                    creds = c.derive_api_key()
+                except Exception:
+                    creds = c.create_or_derive_api_key()
+                c.set_api_creds(creds)
+            elif hasattr(c, "create_or_derive_api_creds"):
                 creds = c.create_or_derive_api_creds()
                 c.set_api_creds(creds)
             self.client = c
