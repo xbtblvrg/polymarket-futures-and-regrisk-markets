@@ -54,6 +54,7 @@ class PositionProofReport:
     leg_shares: Dict[str, float]
     is_profitable_go: bool
     proof_summary: str
+    positive_or_breakeven_prob: float = 0.0
 
     @property
     def min_covered_profit_usd(self) -> float:
@@ -189,9 +190,11 @@ class MarketStrategyOptimizer:
                 max_profit = -total_cost
                 min_pos_profit = -total_cost
                 realistic_expected_profit = round(-max_loss_guarded, 6)
+                pos_prob = 0.0
             else:
                 max_profit = max(p for _, p in covered_states_profits)
                 min_pos_profit = min(p for _, p in covered_states_profits)
+                pos_prob = round(sum(prob for prob, net_p in covered_states_profits if net_p >= -1e-6), 6)
                 if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction > 0.0:
                     frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
                     if uncovered_prob > 1e-6:
@@ -220,6 +223,10 @@ class MarketStrategyOptimizer:
             }
             max_profit = max(net_profits_if_win.values())
             min_pos_profit = min(net_profits_if_win.values())
+            pos_prob = round(
+                sum(o.true_prob for o in active_outcomes if net_profits_if_win[o.token_id] >= -1e-6),
+                6,
+            )
             uncovered_prob = max(0.0, 1.0 - covered_prob_sum)
             if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction > 0.0 and uncovered_prob > 1e-6:
                 frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
@@ -243,7 +250,8 @@ class MarketStrategyOptimizer:
         summary = (
             f"{'GO' if is_go else 'NO_GO'} | Cost=${total_cost:.2f} | "
             f"MaxProfit=+${max_profit:.2f} | RealisticE[PnL]=${realistic_expected_profit:+.2f} | "
-            f"GuardedMaxLoss=-${max_loss_guarded:.2f} (Naive=-${total_cost:.2f}) | R/R={effective_rr:.2f}x"
+            f"GuardedMaxLoss=-${max_loss_guarded:.2f} (Naive=-${total_cost:.2f}) | "
+            f"Win/BE_Prob={pos_prob * 100.0:.1f}% | R/R={effective_rr:.2f}x"
         )
 
         return PositionProofReport(
@@ -258,6 +266,7 @@ class MarketStrategyOptimizer:
             leg_shares={k: round(v, 6) for k, v in leg_shares.items() if v > 0.0},
             is_profitable_go=is_go,
             proof_summary=summary,
+            positive_or_breakeven_prob=pos_prob,
         )
 
     @staticmethod
@@ -648,6 +657,7 @@ class MarketStrategyOptimizer:
         no_outcomes: Optional[List[OutcomeSpec]] = None,
         scaling_spec: Optional[LifecycleScalingSpec] = None,
         min_acceptable_rr: float = 0.0,
+        custom_candidates: Optional[List[Tuple[str, PositionProofReport]]] = None,
     ) -> UnifiedMarketStrategyReport:
         """
         Canonical Pre-Verified Market Evaluation Protocol:
@@ -655,14 +665,20 @@ class MarketStrategyOptimizer:
            - Family 1: `ACTIVE_YES_FREEROLL_BASKET` (Taker Ask-Integral across multi-ranking subsets & 3 geometries),
            - Family 2: `MAKER_PASSIVE_YES_BASKET` (Maker Bid+tick limit accumulation when spreads are wide),
            - Family 3: `NEGRISK_NO_SYNTHETIC_FIELD` (K-leg NO baskets where K-1 legs contractually pay $1.00),
-           - Family 4: `HYBRID_YES_NO_SHIELDED` (NO synthetic field shield self-financing underpriced YES contenders).
-        2. Selects the global mathematical argmax maximizing R/R and Profit with minimized MaxLoss.
+           - Family 4: `HYBRID_YES_NO_SHIELDED` (NO synthetic field shield self-financing underpriced YES contenders),
+           - Family 5+: Any bespoke first-principles `custom_candidates` invented for the market's unique structure.
+        2. Selects the global mathematical argmax maximizing R/R, Profit, and Win/Breakeven Probability with minimized MaxLoss.
         3. Applies the canonical $X immediate + $0.5X/week conditional scaling model.
         4. Executes mandatory pre-output verification checks so the result is 100% consistent before presentation.
         """
         scaling = scaling_spec or LifecycleScalingSpec()
         candidates: List[Tuple[str, PositionProofReport]] = []
         family_summaries: Dict[str, str] = {}
+
+        if custom_candidates:
+            for fam_name, rep in custom_candidates:
+                candidates.append((fam_name, rep))
+                family_summaries[fam_name] = rep.proof_summary
 
         if yes_outcomes:
             try:
