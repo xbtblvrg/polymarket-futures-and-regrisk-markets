@@ -60,6 +60,19 @@ class PositionProofReport:
     def min_covered_profit_usd(self) -> float:
         return self.min_positive_state_profit_usd
 
+    @property
+    def composite_utility_score(self) -> float:
+        """
+        Joint 3-pillar optimization score from first principles:
+          Effective R/R * Win/Breakeven Probability * Capital Protection Ratio (1 - MaxLoss / TotalCost).
+        Prevents low-probability longshot gambles from beating high-probability, low-MaxLoss baskets.
+        """
+        if not self.is_profitable_go or self.total_cost_usd <= 0.0:
+            return -1e9 + self.effective_rr
+        cap_prot = max(0.01, 1.0 - (self.max_loss_guarded_usd / self.total_cost_usd))
+        win_p = max(0.01, self.positive_or_breakeven_prob)
+        return round(self.effective_rr * win_p * cap_prot, 6)
+
 
 @dataclass(frozen=True)
 class LifecycleScalingSpec:
@@ -413,7 +426,13 @@ class MarketStrategyOptimizer:
         if not reports:
             raise ValueError("No candidate basket vector could be absorbed by the live orderbooks.")
         reports.sort(
-            key=lambda r: (r.is_profitable_go, r.effective_rr, r.realistic_expected_profit_usd, -r.max_loss_guarded_usd),
+            key=lambda r: (
+                r.is_profitable_go,
+                r.composite_utility_score,
+                r.effective_rr,
+                r.realistic_expected_profit_usd,
+                -r.max_loss_guarded_usd,
+            ),
             reverse=True,
         )
         return reports[0]
@@ -510,7 +529,13 @@ class MarketStrategyOptimizer:
         if not reports:
             raise ValueError("No valid NO synthetic field basket could be constructed or absorbed.")
         reports.sort(
-            key=lambda r: (r.is_profitable_go, r.effective_rr, r.realistic_expected_profit_usd, -r.max_loss_guarded_usd),
+            key=lambda r: (
+                r.is_profitable_go,
+                r.composite_utility_score,
+                r.effective_rr,
+                r.realistic_expected_profit_usd,
+                -r.max_loss_guarded_usd,
+            ),
             reverse=True,
         )
         return reports[0]
@@ -645,7 +670,13 @@ class MarketStrategyOptimizer:
         if not reports:
             raise ValueError("No valid hybrid YES+NO strategy could be constructed or absorbed.")
         reports.sort(
-            key=lambda r: (r.is_profitable_go, r.effective_rr, r.realistic_expected_profit_usd, -r.max_loss_guarded_usd),
+            key=lambda r: (
+                r.is_profitable_go,
+                r.composite_utility_score,
+                r.effective_rr,
+                r.realistic_expected_profit_usd,
+                -r.max_loss_guarded_usd,
+            ),
             reverse=True,
         )
         return reports[0]
@@ -755,6 +786,7 @@ class MarketStrategyOptimizer:
         candidates.sort(
             key=lambda item: (
                 item[1].is_profitable_go,
+                item[1].composite_utility_score,
                 item[1].effective_rr,
                 item[1].realistic_expected_profit_usd,
                 -item[1].max_loss_guarded_usd,
