@@ -331,7 +331,11 @@ class MarketStrategyOptimizer:
         """
         eligible: List[Tuple[float, float, float, OutcomeSpec]] = []
         for o in outcomes:
-            top_ask = o.orderbook.asks[0].price if o.orderbook.asks else o.target_entry_price
+            top_ask = (
+                o.orderbook.asks[0].price
+                if (o.use_live_ask_integral and o.orderbook.asks)
+                else o.target_entry_price
+            )
             if top_ask <= 0.0 or top_ask >= 1.0 or o.true_prob <= 0.0:
                 continue
             best_bid = o.orderbook.bids[0].price if o.orderbook.bids else max(0.0, top_ask - o.orderbook.tick_size)
@@ -723,12 +727,22 @@ class MarketStrategyOptimizer:
             except ValueError:
                 pass
 
-            # Also evaluate Passive Maker Entry (best_bid + tick_size) when bid-ask spread > 1 tick
+            # Also evaluate Smart Maker/Taker Entry (passive best_bid or best_bid+tick on wide spreads,
+            # immediate ask on ultra-tight 1-tick spreads) across the full contender set
             maker_specs: List[OutcomeSpec] = []
+            has_wide_spread_leg = False
             for o in yes_outcomes:
                 if o.orderbook.bids and o.orderbook.asks:
-                    maker_p = round(min(o.orderbook.best_ask, o.orderbook.best_bid + o.orderbook.tick_size), 6)
-                    if 0.0 < maker_p < o.orderbook.best_ask:
+                    spread = round(o.orderbook.best_ask - o.orderbook.best_bid, 6)
+                    if spread > o.orderbook.tick_size + 1e-6:
+                        maker_p = round(o.orderbook.best_bid + o.orderbook.tick_size, 6)
+                        has_wide_spread_leg = True
+                    elif spread >= 0.005:
+                        maker_p = round(o.orderbook.best_bid, 6)
+                        has_wide_spread_leg = True
+                    else:
+                        maker_p = round(o.orderbook.best_ask, 6)
+                    if 0.0 < maker_p < 1.0:
                         maker_specs.append(
                             OutcomeSpec(
                                 token_id=o.token_id,
@@ -741,7 +755,7 @@ class MarketStrategyOptimizer:
                                 use_live_ask_integral=False,
                             )
                         )
-            if maker_specs:
+            if maker_specs and has_wide_spread_leg:
                 try:
                     maker_rep = MarketStrategyOptimizer.select_optimal_basket(
                         outcomes=maker_specs,
@@ -749,9 +763,7 @@ class MarketStrategyOptimizer:
                         min_acceptable_rr=min_acceptable_rr,
                     )
                     family_summaries["MAKER_PASSIVE_YES_BASKET"] = maker_rep.proof_summary
-                    # Taker immediate execution is preferred unless Taker is not GO and Maker is GO
-                    if not any(c[0] == "ACTIVE_YES_FREEROLL_BASKET" and c[1].is_profitable_go for c in candidates):
-                        candidates.append(("MAKER_PASSIVE_YES_BASKET", maker_rep))
+                    candidates.append(("MAKER_PASSIVE_YES_BASKET", maker_rep))
                 except ValueError:
                     pass
 
