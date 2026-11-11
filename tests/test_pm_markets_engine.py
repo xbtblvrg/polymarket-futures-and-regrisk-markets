@@ -474,8 +474,6 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
             initial_capital_x_usd=1000.0,
             weekly_addition_fraction=0.50,
             active_opportunity_weeks=6,
-            adverse_stop_weeks=0,
-            weekly_edge_retention_factor=0.90,
         )
         unified_no = MarketStrategyOptimizer.evaluate_unified_market_strategy(
             market_name="NCAA_2026_Test",

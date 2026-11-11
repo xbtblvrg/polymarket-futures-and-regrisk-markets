@@ -67,8 +67,6 @@ class LifecycleScalingSpec:
     initial_capital_x_usd: float = 1000.0
     weekly_addition_fraction: float = 0.50
     active_opportunity_weeks: int = 8
-    adverse_stop_weeks: int = 0
-    weekly_edge_retention_factor: float = 0.85
 
     @property
     def weekly_tranche_usd(self) -> float:
@@ -92,6 +90,7 @@ class UnifiedMarketStrategyReport:
     weekly_tranche_05x_usd: float
     active_opportunity_weeks: int
     total_scaled_capital_usd: float
+    early_stop_max_loss_usd: float
     lifecycle_max_loss_usd: float
     lifecycle_max_profit_usd: float
     lifecycle_most_likely_profit_usd: float
@@ -200,18 +199,13 @@ class MarketStrategyOptimizer:
                         # Exhaustive state partition (e.g. K-leg NO basket where K-1 legs always pay $1.00):
                         # Worst-case maturity loss is strictly bounded by |min_pos_profit|, never total_cost.
                         max_loss_guarded = round(max(max_loss_guarded, abs(min_pos_profit) * frac), 6)
-                intrinsic_ev = sum(prob * net_p for prob, net_p in covered_states_profits) - uncovered_prob * total_cost
-                if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction >= 1.0 - 1e-6:
-                    realistic_expected_profit = round(intrinsic_ev, 6)
-                elif intrinsic_ev <= 0.0 and uncovered_prob > 1e-6:
-                    # Supermartingale / negative-intrinsic-edge guard: stop-loss cannot turn negative edge into positive EV.
-                    realistic_expected_profit = round(intrinsic_ev, 6)
-                else:
-                    realistic_expected_profit = round(
-                        sum(prob * net_p for prob, net_p in covered_states_profits)
-                        - uncovered_prob * max_loss_guarded,
-                        6,
-                    )
+                # Exact linearity of expectation: \sum_{\omega} P(\omega) NetPnL(\omega) - uncovered_prob * total_cost.
+                # Never adds phantom profit from (total_cost - max_loss_guarded).
+                realistic_expected_profit = round(
+                    sum(prob * net_p for prob, net_p in covered_states_profits)
+                    - uncovered_prob * total_cost,
+                    6,
+                )
         else:
             covered_prob_sum = sum(o.true_prob for o in active_outcomes)
             if covered_prob_sum > 1.0 + 1e-6:
@@ -229,26 +223,13 @@ class MarketStrategyOptimizer:
             if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction > 0.0 and uncovered_prob > 1e-6:
                 frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
                 max_loss_guarded = round(max(max_loss_guarded, total_cost * frac), 6)
-            intrinsic_ev = (
+            # Exact linearity of expectation: \sum_i p_i * (q_i * V_exit,i - C) - (1 - \sum_i p_i) * C
+            # \equiv \sum_i (p_i * q_i * V_exit,i - C_i). Strictly positive iff cost-weighted edge > 1.0.
+            realistic_expected_profit = round(
                 sum(o.true_prob * net_profits_if_win[o.token_id] for o in active_outcomes)
-                - uncovered_prob * total_cost
+                - uncovered_prob * total_cost,
+                6,
             )
-            all_legs_positive_edge = all(
-                (o.true_prob * o.target_exit_price) > (o.target_entry_price + 1e-6)
-                for o in active_outcomes
-            )
-            if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction >= 1.0 - 1e-6:
-                realistic_expected_profit = round(intrinsic_ev, 6)
-            elif intrinsic_ev <= 0.0 and not all_legs_positive_edge:
-                # Overpriced / negative-edge basket: stop-loss cannot manufacture positive expected value.
-                realistic_expected_profit = round(intrinsic_ev, 6)
-            else:
-                # Active Guardian trajectory on positive-edge outcomes: adverse uncovered branch exits at max_loss_guarded.
-                realistic_expected_profit = round(
-                    sum(o.true_prob * net_profits_if_win[o.token_id] for o in active_outcomes)
-                    - uncovered_prob * max_loss_guarded,
-                    6,
-                )
 
         effective_rr = round(realistic_expected_profit / max_loss_guarded, 4) if max_loss_guarded > 0 else 0.0
         is_go = (
@@ -513,23 +494,11 @@ class MarketStrategyOptimizer:
         )
         best_family, best_proof = candidates[0]
 
-        eff_mult = 1.0 + (
-            scaling.weekly_addition_fraction
-            * scaling.active_opportunity_weeks
-            * scaling.weekly_edge_retention_factor
-        )
-        if best_family == "NEGRISK_NO_SYNTHETIC_FIELD":
-            # K-1 of K NO legs are mathematically guaranteed to pay $1.00 at maturity across all deployed tranches
-            total_scale_ratio = scaling.total_active_capital_usd / max(1e-6, best_proof.total_cost_usd)
-            lifecycle_max_loss = round(best_proof.max_loss_guarded_usd * total_scale_ratio, 2)
-        else:
-            # Active YES Free-Roll Basket: conditional $0.5X/week halts immediately on early stop-loss,
-            # while advancing weeks lock in Free-Roll principal recovery.
-            stop_scale_ratio = 1.0 + (scaling.weekly_addition_fraction * scaling.adverse_stop_weeks)
-            lifecycle_max_loss = round(best_proof.max_loss_guarded_usd * stop_scale_ratio, 2)
-
-        lifecycle_max_profit = round(best_proof.max_profit_usd * eff_mult, 2)
-        lifecycle_most_likely = round(best_proof.realistic_expected_profit_usd * eff_mult, 2)
+        total_scale_ratio = scaling.total_active_capital_usd / max(1e-6, best_proof.total_cost_usd)
+        early_stop_max_loss = round(best_proof.max_loss_guarded_usd, 2)
+        lifecycle_max_loss = round(best_proof.max_loss_guarded_usd * total_scale_ratio, 2)
+        lifecycle_max_profit = round(best_proof.max_profit_usd * total_scale_ratio, 2)
+        lifecycle_most_likely = round(best_proof.realistic_expected_profit_usd * total_scale_ratio, 2)
         lifecycle_rr = round(lifecycle_most_likely / lifecycle_max_loss, 4) if lifecycle_max_loss > 0 else 0.0
 
         checks: List[str] = ["CHECK_1_ORDERBOOK_DEPTH_VERIFIED", "CHECK_2_PROBABILITY_CONSERVATION_VERIFIED"]
@@ -551,12 +520,12 @@ class MarketStrategyOptimizer:
             f"1. Induló $X=${scaling.initial_capital_x_usd:.2f} azonnali elhelyezése ({best_family}): [{leg_desc}]. "
             f"2. Heti +$0.5X=${scaling.weekly_tranche_usd:.2f}/hét dinamikus rátöltés ({scaling.active_opportunity_weeks} aktív héten át, "
             f"összesen max. ${scaling.total_active_capital_usd:.2f}) kizárólag addig, amíg a piaci él fennáll; "
-            f"stop-loss vagy tézis-sérülés esetén a heti rátöltés azonnal leáll."
+            f"korai stop-loss esetén a heti rátöltés azonnal leáll (EarlyStopMaxLoss=-${early_stop_max_loss:.2f})."
         )
         strategy_summary = (
             f"{market_name} | {best_family} | {'VERIFIED GO' if is_verified_go else 'VERIFIED NO-GO'} | "
-            f"MaxLoss=-${lifecycle_max_loss:.2f} | MaxProfit=+${lifecycle_max_profit:.2f} | "
-            f"MostLikelyProfit=${lifecycle_most_likely:+.2f} | R/R={lifecycle_rr:.2f}x"
+            f"EarlyStopMaxLoss=-${early_stop_max_loss:.2f} | FullScaledMaxLoss=-${lifecycle_max_loss:.2f} | "
+            f"MaxProfit=+${lifecycle_max_profit:.2f} | MostLikelyProfit=${lifecycle_most_likely:+.2f} | R/R={lifecycle_rr:.2f}x"
         )
 
         return UnifiedMarketStrategyReport(
@@ -569,6 +538,7 @@ class MarketStrategyOptimizer:
             weekly_tranche_05x_usd=scaling.weekly_tranche_usd,
             active_opportunity_weeks=scaling.active_opportunity_weeks,
             total_scaled_capital_usd=scaling.total_active_capital_usd,
+            early_stop_max_loss_usd=early_stop_max_loss,
             lifecycle_max_loss_usd=lifecycle_max_loss,
             lifecycle_max_profit_usd=lifecycle_max_profit,
             lifecycle_most_likely_profit_usd=lifecycle_most_likely,
