@@ -119,9 +119,6 @@ class MarketStrategyOptimizer:
             if max_loss_guarded <= 0.0:
                 min_tick_friction = sum(leg_shares[o.token_id] * o.orderbook.tick_size for o in active_outcomes)
                 max_loss_guarded = round(max(1e-6, min_tick_friction), 6)
-            if uncovered_maturity_loss_fraction is not None:
-                frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
-                max_loss_guarded = round(max(max_loss_guarded, total_cost * frac), 6)
 
         # Evaluate state-space payoffs (either general joint states \Omega or mutually exclusive partition)
         if joint_states is not None:
@@ -155,11 +152,14 @@ class MarketStrategyOptimizer:
             else:
                 max_profit = max(p for _, p in covered_states_profits)
                 min_pos_profit = min(p for _, p in covered_states_profits)
-                if min_pos_profit < 0.0 and uncovered_maturity_loss_fraction > 0.0:
-                    max_loss_guarded = max(
-                        max_loss_guarded,
-                        round(abs(min_pos_profit) * min(1.0, uncovered_maturity_loss_fraction), 6),
-                    )
+                if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction > 0.0:
+                    frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
+                    if uncovered_prob > 1e-6:
+                        max_loss_guarded = round(max(max_loss_guarded, total_cost * frac), 6)
+                    elif min_pos_profit < 0.0:
+                        # Exhaustive state partition (e.g. K-leg NO basket where K-1 legs always pay $1.00):
+                        # Worst-case maturity loss is strictly bounded by |min_pos_profit|, never total_cost.
+                        max_loss_guarded = round(max(max_loss_guarded, abs(min_pos_profit) * frac), 6)
                 # By Probability Conservation & Optional Stopping, expected profit on uncovered states loses total_cost
                 # at maturity unless joint_states explicitly specify intermediate liquidation payoffs in token_valuations.
                 realistic_expected_profit = round(
@@ -181,6 +181,9 @@ class MarketStrategyOptimizer:
             max_profit = max(net_profits_if_win.values())
             min_pos_profit = min(net_profits_if_win.values())
             uncovered_prob = max(0.0, 1.0 - covered_prob_sum)
+            if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction > 0.0 and uncovered_prob > 1e-6:
+                frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
+                max_loss_guarded = round(max(max_loss_guarded, total_cost * frac), 6)
             # Exact fundamental expected profit: \sum_i p_i * (q_i * V_exit,i - total_cost) - (1 - \sum_i p_i) * total_cost
             # = \sum_i (q_i * p_i * V_exit,i) - total_cost. Never adds phantom profit from (total_cost - max_loss_guarded).
             realistic_expected_profit = round(
