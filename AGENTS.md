@@ -1,7 +1,7 @@
 # Autonóm Polymarket Multi-Option, Futures & NegRisk Quant Engine — Alkotmány és Mesterterv
 
-**Frissítve:** 2026-11-10  
-**Státusz:** 100% Anchoring-Mentes, Túlirányítás-Mentes, Bizonyítás-Alapú Rendszeralkotmány (`100% Standalone Repository`)
+**Frissítve:** 2026-11-11  
+**Státusz:** 100% Anchoring-Mentes, Túlirányítás-Mentes, Egységes `$X + $0.5X/\text{hét}` Bizonyítás-Alapú Rendszeralkotmány (`100% Standalone Repository`)
 
 ---
 
@@ -44,28 +44,34 @@ A rendszer egyetlen legfőbb küldetése: **minden egyes beküldött vagy vizsg�
 
 ---
 
-## 3. Kötelező Bizonyítási Protokoll Új Piac Vizsgálatakor (`Proof-First Evaluation Protocol`)
+## 3. Az 5-Lépéses Egységes Futures Elemzési, `$X + $0.5X/\text{hét}` Tőke- és Verifikációs Protokoll (`Canonical Evaluation & Pre-Verification Standard`)
 
-Minden újonnan beküldött vagy szkennelt piacnál a rendszernek — mindenféle előre gyártott sablon nélkül — az alábbi **4 matematikai és empirikus bizonyítási lépést** kell végrehajtania:
+Minden újonnan beküldött vagy szkennelt futures piacon a rendszernek — mindenféle előre gyártott sablon vagy túlirányító korlátozás nélkül — az alábbi **5 lépést** kell végrehajtania:
 
-1. **1. Lépés — Levágásmentes Élő Tény- és Könyv-Felderítés (`Live Untruncated State & Orderbook Discovery`):**
-   - Lekérdezi a piac összes opcióját, pontos elszámolási szabályát (`resolution rules`), hátralévő időtartamát ($T - t_0$), valamint minden releváns opció teljes élő CLOB vételi (`Bid Ladder`) és eladási (`Ask Ladder`) könyvét, a tényleges árlépésközt (`orderPriceMinTickSize`) és a minimum megbízási méretet (`min_order_size`).
-   - Lekérdezi a piac mögöttes folyamatának összes releváns, aktuális külső tényadatát.
-2. **2. Lépés — Első-Elvű Megoldáskeresés Teljes Szabadsággal (`Unconstrained First-Principles Solution Search`):**
-   - A nyers tényadatokból és a piaci árakból kiindulva első elvekből levezeti, hol van a piacon **valódi matematikai félreárazás (`Edge`) vagy strukturális aszimmetria**, és melyik $\mathbf{q} \ge \mathbf{0}$ pozíció- és végrehajtási pálya ($\mathcal{P}$) adja a legmagasabb valós `Risk/Reward` arányt (egymást kizáró és nem kizáró kimeneteli állapottereket, egyedi lábakat, tetszőleges $K \in \{1, \dots, N\}$ kosarakat és többlépcsős dinamikus tőkekivételi / `Free-Roll` pályákat egyaránt pontosan kezelve).
-   - **Független, Minta-Arányos Valószínűségi Kalibráció (`Independent Sample-Weighted Probability Law — Zero Market Anchoring`):** A valódi kimeneteli valószínűségeket ($P_{\text{true}}$) tilos kis mintás megfigyelésekből korlátlanul extrapolálni, de **ugyanúgy tilos a piaci árhoz (`CLOB Ask/Mid`) hozzáláncolni** (hiszen egy félreárazott vagy friss hírt késve követő piacon épp a piaci ár a hibás!). A modellnek független fundamentális alapeloszlásból, az aktuális minta statisztikai információs súlyából és az élő strukturális/sérülési sokkokból kell levezetnie $P_{\text{true}}$-t.
-3. **3. Lépés — Szigorú Pálya-Konzisztencia és Könyv-Integrál Bizonyítás (`Path-Consistent Valuation & Book-Integral Proof`):**
-   - Minden vizsgált $(\mathbf{q}, \mathcal{P})$ megoldási tervre egzaktul, kívülről bemondott konstansok nélkül bizonyítja:
-     - **A valós belépési költséget és átlagárat (`VWAP`):** Az eladási könyv integráljából ($\int_0^{q_i} \text{Ask}_i(u)\,du$) vagy — passzív `Maker` építésnél — a valószínűségi axiómákkal ($\sum_{\omega \in \Omega} P(\omega) = 1$) és a hátralévő időtartammal ($T - t_0$) konzisztens, reálisan teljesülő árszintekből.
-     - **Pálya- és Időhorizont-Azonosság (`Path & Horizon Parity Invariant`):** A számlálót ($\mathbb{E}[\text{PnL}(\mathcal{P})]$, $\text{MaxProfit}(\mathcal{P})$) és a nevezőt ($\text{MaxLoss}_{\text{guarded}}(\mathcal{P})$) **kizárólag ugyanazon a $\mathcal{P}$ végrehajtási és kiszállási döntési fán** szabad kiszámolni. Szigorúan tilos a számlálóban egy 100%-ig lejáratig tartott (`$1.00`) kifizetést feltételezni, miközben a nevezőben 1 napos `Bid`-könyv likvidációs veszteséggel számolunk:
-       - Ha a $\mathcal{P}$ pálya lejáratig tart ($\tau = T$), a veszteségoldalon kötelezően szerepel a lefedetlen állapotok ($1 - \sum_{i \in S} P_i$) lejárati tőkevesztése.
-       - Ha a $\mathcal{P}$ pálya köztes `Bid`-könyv stop-losszal vagy többlépcsős átárazódási tőkekivétellel (`Free-Roll`) dolgozik, akkor mind a védett veszteséget ($\sum_i \int_0^{q_i} \text{Bid}_i(u, \tau)\,du$ és $\Delta p_i$ alapján), mind a várható nyereséget **ugyanannak a többlépcsős $\mathcal{P}$ pályának a valós `Bid`-könyvbeli és maradvány-kifizetési ágaiból** kell levezetni.
-4. **4. Lépés — Globális Optimum Egyedisége és A 4 Kötelező Kimeneteli Szám (`Global Argmax Uniqueness & 4 Mandatory Metrics`):**
-   - A rendszernek tilos üzenetenként kézzel új kosárméreteket vagy ad-hoc képleteket rögtönöznie: minden piacon végig kell értékelnie a teljes megengedett $(\mathbf{q}, \mathcal{P})$ megoldási teret, és **kizárólag a globális matematikai optimumot ($\arg\max \text{R/R}_{\text{effective}}$)** szabad egyetlen, reprodukálható döntésként kiadnia, kimutatva:
-     1. **Maximális veszteség ($\text{MaxLoss}_{\text{guarded}}(\mathcal{P}^*)$ és naiv lejáratkori kockázat),**
-     2. **Maximális elérhető profit ($\text{MaxProfit}(\mathcal{P}^*)$),**
-     3. **Reális várható profit ($\mathbb{E}[\text{PnL}_{\text{real}}(\mathcal{P}^*)]$),**
-     4. **Valós `Risk/Reward` arány ($\text{R/R}_{\text{effective}}(\mathcal{P}^*)$) és az ebből következő `GO / NO-GO` ítélet.**
+1. **1. Lépés — Alapos Piaci Strukturális és Fundamentális Elemzés (`Deep Structural & Fundamental Analysis`):**
+   - **Piaci strukturális szint:** Lekérdezi a piac összes `YES` és `NO` opcióját, pontos elszámolási szabályát (`NegRisk` / egymást kizáró struktúra), a listázott kimenetelek teljességét (hiányoznak-e veretlen/élcsapatok az aktív piacok közül), a hátralévő időtartamot ($T - t_0$), a köztes átárazódási mérföldköveket (alapszakasz vége, rájátszás-ágrajz, konferencia-döntők), valamint minden releváns `YES` és `NO` token teljes élő CLOB vételi (`Bid Ladder`) és eladási (`Ask Ladder`) könyvét.
+   - **Fundamentális szint:** Lekérdezi a mögöttes folyamat összes élő tényadatát (tabella, pontkülönbség / Net Rating, sorsolás, sérülések, rájátszás-esélyek), és ezekből — mesterséges túlzsugorítás (`over-shrinkage`) vagy piaci árhoz láncolás nélkül — levezeti a valódi kimeneteli és rájátszás-átárazódási eloszlást.
+2. **2. Lépés — Optimális Stratégia Megalkotása (`Min MaxLoss, Max Profit, Max R/R`):**
+   - Előzetes megkötések nélkül, már az első menetben egyidejűleg megvizsgálja és összehasonlítja az összes stratégiai családot (`MarketStrategyOptimizer.evaluate_unified_market_strategy`):
+     - **A) Aktív `YES` Érték- és Rájátszás `Free-Roll` Kosár (`ACTIVE_YES_FREEROLL_BASKET`):** Ahol az alulárazott esélyesek rájátszásbeli egyidejű felértékelődésekor (`Free-Roll Swing Trim`) a tőke visszanyerhető, a végső győztes pedig `$1.00`-t fizet, miközben a lefelé mutató kockázatot az élő `Bid`-könyv és az `AutonomousMarketsGuardian` védi.
+     - **B) `NegRisk NO` Szintetikus Mezőny-Kosár (`NEGRISK_NO_SYNTHETIC_FIELD`):** Ahol $K$ darab túlvett favorit `NO` lábából legalább $K-1$ darab **100% matematikai garanciával `$1.00`-t fizet lejáratkor**, így a maximális veszteség szerződéses szinten minimálisra (`~1.2%–2.7%`) korlátozódik, miközben bármely külső győztes esetén mind a $K$ darab `NO` láb `$1.00`-t fizet (`select_optimal_no_field_basket`).
+   - Kiválasztja azt a globális optimumot, amelyik az adott piacon **minimalizált veszteség (`MaxLoss`) mellett a legnagyobb profitot és a legnagyobb `R/R` arányt** éri el.
+3. **3. Lépés — Alapértelmezett Tőke- és Dinamikus Skálázási Modell (`$X` Azonnali Kezdő Tőke + `$0.5X / hét` Feltételes Rátöltés):**
+   - **Azonnali kezdő befektetés (`t_0`):** **`$X`** azonnali tőkeallokáció az adott piacra (alapértelmezett bázisegység: `$X = $1,000.00`, bármilyen `$X` összegre arányosan skálázható).
+   - **Heti további tőke (`+$0.5X / hét`, amíg indokolja a piaci lehetőség):** Hetente további **`$0.5X`** (pl. `$500.00 / hét`) megy az adott piacra **mindaddig, amíg a piaci lehetőség és a fundamentális él (`Edge`) indokolja** ($W_{\text{active}}$ aktív héten át).
+   - **Aszimmetrikus Kockázat-Zár (`Conditional Scaling Stop`):** Ha a piaci lehetőség megszűnik, vagy az induló `$X` pozíció eléri a védett stop-loss / fedezési küszöböt, a heti `$0.5X` rátöltés **azonnal leáll** (soha nem öntünk vakon heti tőkét veszteséges pozícióba!). Így a `Max veszteség` szigorúan korlátos marad, míg kedvező alakulásnál a heti `$0.5X` rátöltések és a `Free-Roll` tőkekivétel felépítik a maximális profitot. Ez az alapértelmezett megközelítés minden futures piachoz; ha ettől eltérünk, azt külön megbeszéljük.
+4. **4. Lépés — Kiadás Előtti Kötelező Belső Verifikáció (`Mandatory Pre-Output Verification — Zero Flip-Flop Invariant`):**
+   - Mielőtt az AI bármilyen eredményt kiadna a felhasználónak, a `MarketStrategyOptimizer.evaluate_unified_market_strategy` **kód-szinten lefuttatja a teljes belső ellenőrzést** (`CHECK_1_ORDERBOOK_DEPTH_VERIFIED`, `CHECK_2_PROBABILITY_CONSERVATION_VERIFIED`, `CHECK_3_POSITIVE_INTRINSIC_EDGE_VERIFIED`, `CHECK_4_DOWNSIDE_GUARD_BOUNDED`, `CHECK_5_CONDITIONAL_DCA_STOP_VERIFIED`).
+   - **Szigorúan tilos** előbb félig ellenőrzött tervet kiadni, majd a *"biztos? jól számoltad?"* kérdésre utólag számítási rezsimet váltani (pl. aktív életciklus-kezelésről hirtelen vak, passzív `-100%`-os lejáratig tartásra váltani) és megfordítani az ítéletet (`GO <-> NO-GO`). A teljes verifikációnak **a válasz kiadása előtt** kell megtörténnie!
+5. **5. Lépés — Egységes Vezetői Összefoglaló és A 4 Kötelező Szám (`Standardized Output Summary`):**
+   Minden piaci elemzés végén világosan és strukturáltan össze kell foglalni:
+   - **1. Mi a teendő:** Konkrét azonnali lépések (`$X` kezdő lábak, darabszámok, belépési árak + a heti `+$0.5X` dinamikus rátöltés szabálya).
+   - **2. Mi röviden a stratégia:** Hogyan működik a stratégia, mi garantálja a minimalizált veszteséget (`Bid`-könyv / `NO` $K-1$ kifizetési garancia / `Free-Roll`), és miből keletkezik a profit.
+   - **3. Milyen eredmény várható (A 4 Kötelező Szám — mind az induló `$X`, mind a teljes `$X + $0.5X/\text{hét}` aktív életciklusra):**
+     1. **Max veszteség (`MaxLoss`),**
+     2. **Max profit (`MaxProfit`),**
+     3. **Legvalószínűbb profit (`Most Likely Profit`),**
+     4. **`R/R` (`Legvalószínűbb profit / |Max veszteség|`).**
 
 ---
 

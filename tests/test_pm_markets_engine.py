@@ -13,6 +13,7 @@ from pm_markets_engine import (
     CentralWalletGuard,
     JointStateSpec,
     LadderLevel,
+    LifecycleScalingSpec,
     MarketScannerEvaluator,
     MarketStrategyOptimizer,
     MarketVault,
@@ -379,6 +380,119 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         advice = [{"id": "adv_1", "sha256": "abc123"}]
         valid_review = [{"id": "adv_1", "sha256": "abc123", "disposition": "used", "reason": "Verified integral proof"}]
         self.assertEqual(len(validate_helper_reviews(valid_review, advice)), 1)
+
+    def test_unified_market_strategy_and_conditional_x_05x_scaling(self) -> None:
+        """Verifies unified YES vs NO strategy discovery and $X + $0.5X/week conditional scaling invariants."""
+        # Scenario A: Overpriced YES favorites with unlisted contenders -> Optimizer must discover NO Synthetic Field Basket
+        no_specs = [
+            OutcomeSpec(
+                token_id="georgia_no",
+                name="Georgia NO",
+                true_prob=1.0 - 0.145,
+                target_entry_price=0.800,
+                orderbook=OrderbookSnapshot(
+                    token_id="georgia_no",
+                    bids=(LadderLevel(0.790, 20000.0),),
+                    asks=(LadderLevel(0.800, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                use_live_ask_integral=True,
+            ),
+            OutcomeSpec(
+                token_id="nd_no",
+                name="Notre Dame NO",
+                true_prob=1.0 - 0.125,
+                target_entry_price=0.830,
+                orderbook=OrderbookSnapshot(
+                    token_id="nd_no",
+                    bids=(LadderLevel(0.820, 20000.0),),
+                    asks=(LadderLevel(0.830, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                use_live_ask_integral=True,
+            ),
+            OutcomeSpec(
+                token_id="bama_no",
+                name="Alabama NO",
+                true_prob=1.0 - 0.045,
+                target_entry_price=0.880,
+                orderbook=OrderbookSnapshot(
+                    token_id="bama_no",
+                    bids=(LadderLevel(0.870, 20000.0),),
+                    asks=(LadderLevel(0.880, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                use_live_ask_integral=True,
+            ),
+            OutcomeSpec(
+                token_id="miami_no",
+                name="Miami NO",
+                true_prob=1.0 - 0.135,
+                target_entry_price=0.830,
+                orderbook=OrderbookSnapshot(
+                    token_id="miami_no",
+                    bids=(LadderLevel(0.820, 20000.0),),
+                    asks=(LadderLevel(0.830, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                use_live_ask_integral=True,
+            ),
+            OutcomeSpec(
+                token_id="texas_no",
+                name="Texas NO",
+                true_prob=1.0 - 0.055,
+                target_entry_price=0.900,
+                orderbook=OrderbookSnapshot(
+                    token_id="texas_no",
+                    bids=(LadderLevel(0.890, 20000.0),),
+                    asks=(LadderLevel(0.900, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                use_live_ask_integral=True,
+            ),
+            OutcomeSpec(
+                token_id="indiana_no",
+                name="Indiana NO",
+                true_prob=1.0 - 0.115,
+                target_entry_price=0.900,
+                orderbook=OrderbookSnapshot(
+                    token_id="indiana_no",
+                    bids=(LadderLevel(0.890, 20000.0),),
+                    asks=(LadderLevel(0.900, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                use_live_ask_integral=True,
+            ),
+        ]
+        scaling = LifecycleScalingSpec(
+            initial_capital_x_usd=1000.0,
+            weekly_addition_fraction=0.50,
+            active_opportunity_weeks=6,
+            adverse_stop_weeks=0,
+            weekly_edge_retention_factor=0.90,
+        )
+        unified_no = MarketStrategyOptimizer.evaluate_unified_market_strategy(
+            market_name="NCAA_2026_Test",
+            yes_outcomes=None,
+            no_outcomes=no_specs,
+            scaling_spec=scaling,
+            min_acceptable_rr=1.0,
+        )
+        self.assertTrue(unified_no.is_verified_go)
+        self.assertEqual(unified_no.strategy_family, "NEGRISK_NO_SYNTHETIC_FIELD")
+        self.assertAlmostEqual(unified_no.initial_capital_x_usd, 1000.0, places=2)
+        self.assertAlmostEqual(unified_no.weekly_tranche_05x_usd, 500.0, places=2)
+        self.assertAlmostEqual(unified_no.total_scaled_capital_usd, 4000.0, places=2)
+        # On $1,000 initial capital, 6-leg NO basket worst-case loss is only ~$27.05 (2.7%), never $1,000
+        self.assertLess(unified_no.initial_x_proof.max_loss_guarded_usd, 35.0)
+        self.assertGreater(unified_no.lifecycle_effective_rr, 1.0)
+        self.assertIn("CHECK_3_POSITIVE_INTRINSIC_EDGE_VERIFIED", unified_no.verification_checks)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,14 @@ from .scanner_evaluator import (
     integrate_ask_ladder,
     integrate_bid_ladder,
 )
-from .strategy_optimizer import JointStateSpec, MarketStrategyOptimizer, OutcomeSpec, PositionProofReport
+from .strategy_optimizer import (
+    JointStateSpec,
+    LifecycleScalingSpec,
+    MarketStrategyOptimizer,
+    OutcomeSpec,
+    PositionProofReport,
+    UnifiedMarketStrategyReport,
+)
 from .wallet_guard import CentralWalletGuard
 
 __all__ = [
@@ -30,6 +37,7 @@ __all__ = [
     "JointStateSpec",
     "LadderLevel",
     "LegReconciliationRow",
+    "LifecycleScalingSpec",
     "MarketScannerEvaluator",
     "MarketStrategyOptimizer",
     "MarketVault",
@@ -37,6 +45,7 @@ __all__ = [
     "OutcomeSpec",
     "PositionProofReport",
     "TargetLegPlan",
+    "UnifiedMarketStrategyReport",
     "VaultCashState",
     "build_cli_command",
     "decode_cli_response",
@@ -46,4 +55,4 @@ __all__ = [
     "validate_zero_anchoring_prompt",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
