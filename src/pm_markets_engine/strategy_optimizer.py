@@ -241,6 +241,10 @@ class MarketStrategyOptimizer:
                 6,
             )
             uncovered_prob = max(0.0, 1.0 - covered_prob_sum)
+            if max(o.target_exit_price for o in active_outcomes) >= 0.90 and uncovered_prob > 1e-6:
+                # Horizon consistency: if upside assumes holding to maturity ($1.00 payout),
+                # guarded max loss cannot ignore the uncovered championship probability mass.
+                max_loss_guarded = round(max(max_loss_guarded, uncovered_prob * total_cost), 6)
             if uncovered_maturity_loss_fraction is not None and uncovered_maturity_loss_fraction > 0.0 and uncovered_prob > 1e-6:
                 frac = min(1.0, max(0.0, float(uncovered_maturity_loss_fraction)))
                 max_loss_guarded = round(max(max_loss_guarded, total_cost * frac), 6)
