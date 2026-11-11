@@ -492,6 +492,53 @@ class TestPmMarketsEngineInvariants(unittest.TestCase):
         self.assertGreater(unified_no.lifecycle_effective_rr, 1.0)
         self.assertIn("CHECK_3_POSITIVE_INTRINSIC_EDGE_VERIFIED", unified_no.verification_checks)
 
+        # Scenario B: Both YES and NO outcomes provided -> Optimizer must evaluate ALL 4 families (YES Taker, YES Maker, NO Field, Hybrid YES+NO)
+        yes_specs = [
+            OutcomeSpec(
+                token_id="indiana_yes",
+                name="Indiana YES",
+                true_prob=0.145,
+                target_entry_price=0.100,
+                orderbook=OrderbookSnapshot(
+                    token_id="indiana_yes",
+                    bids=(LadderLevel(0.095, 20000.0),),
+                    asks=(LadderLevel(0.100, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                max_step_adverse_drop=0.005,
+                use_live_ask_integral=True,
+            ),
+            OutcomeSpec(
+                token_id="byu_yes",
+                name="BYU YES",
+                true_prob=0.065,
+                target_entry_price=0.040,
+                orderbook=OrderbookSnapshot(
+                    token_id="byu_yes",
+                    bids=(LadderLevel(0.038, 20000.0),),
+                    asks=(LadderLevel(0.040, 20000.0),),
+                    tick_size=0.001,
+                    min_order_size=5.0,
+                ),
+                max_step_adverse_drop=0.005,
+                use_live_ask_integral=True,
+            ),
+        ]
+        unified_all = MarketStrategyOptimizer.evaluate_unified_market_strategy(
+            market_name="NCAA_2026_All_Families",
+            yes_outcomes=yes_specs,
+            no_outcomes=no_specs[:5],
+            scaling_spec=scaling,
+        )
+        self.assertTrue(unified_all.is_verified_go)
+        self.assertIsNotNone(unified_all.evaluated_families_summary)
+        assert unified_all.evaluated_families_summary is not None
+        self.assertIn("ACTIVE_YES_FREEROLL_BASKET", unified_all.evaluated_families_summary)
+        self.assertIn("MAKER_PASSIVE_YES_BASKET", unified_all.evaluated_families_summary)
+        self.assertIn("NEGRISK_NO_SYNTHETIC_FIELD", unified_all.evaluated_families_summary)
+        self.assertIn("HYBRID_YES_NO_SHIELDED", unified_all.evaluated_families_summary)
+
 
 if __name__ == "__main__":
     unittest.main()

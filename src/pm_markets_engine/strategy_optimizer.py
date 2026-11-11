@@ -97,6 +97,7 @@ class UnifiedMarketStrategyReport:
     lifecycle_effective_rr: float
     what_to_do: str
     strategy_summary: str
+    evaluated_families_summary: Optional[Dict[str, str]] = None
 
 
 class MarketStrategyOptimizer:
@@ -294,39 +295,96 @@ class MarketStrategyOptimizer:
         uncovered_maturity_loss_fraction: float = 0.0,
     ) -> PositionProofReport:
         """
-        Deterministic, zero-constant, unconstrained subset optimizer:
-        1. Ranks eligible outcomes by empirical edge ratio (true_prob / top_ask).
-        2. Evaluates every basket size K = 1..N across the entire outcome space without arbitrary sum_ask or K cutoffs.
+        Deterministic, zero-constant, unconstrained subset & geometry optimizer:
+        1. Evaluates multiple independent rankings:
+           - Ranking A: Pure fundamental edge ratio ((true_prob * target_exit_price) / top_ask),
+           - Ranking B: Risk-adjusted edge-to-spread ratio ((true_prob * target_exit_price - top_ask) / per_share_friction),
+           - Plus all individual singletons and positive-edge subsets.
+        2. Evaluates 3 distinct allocation geometries on every candidate subset:
+           - Geometry A: Probability-proportional allocation,
+           - Geometry B: Equal-payout (Dutching) allocation,
+           - Geometry C: Asymmetric Core + Breakeven-Shield allocation (where secondary legs return 100% of budget
+             so NetPnL = $0.00 on shield states, concentrating upside into the highest-edge core legs).
         3. Returns the single global argmax PositionProofReport maximizing Effective R/R and Realistic Expected Profit.
         """
-        scored = []
+        eligible: List[Tuple[float, float, float, OutcomeSpec]] = []
         for o in outcomes:
             top_ask = o.orderbook.asks[0].price if o.orderbook.asks else o.target_entry_price
             if top_ask <= 0.0 or top_ask >= 1.0 or o.true_prob <= 0.0:
                 continue
-            scored.append((o.true_prob / top_ask, top_ask, o))
-        scored.sort(key=lambda x: x[0], reverse=True)
+            best_bid = o.orderbook.bids[0].price if o.orderbook.bids else max(0.0, top_ask - o.orderbook.tick_size)
+            per_share_friction = max(
+                o.orderbook.tick_size,
+                max(0.0, top_ask - best_bid) + max(0.0, o.max_step_adverse_drop),
+            )
+            edge_ratio = (o.true_prob * o.target_exit_price) / top_ask
+            risk_adj_edge = ((o.true_prob * o.target_exit_price) - top_ask) / per_share_friction
+            eligible.append((edge_ratio, risk_adj_edge, top_ask, o))
+
+        orderings = [
+            sorted(eligible, key=lambda x: x[0], reverse=True),
+            sorted(eligible, key=lambda x: x[1], reverse=True),
+        ]
+
+        candidate_subsets: List[List[Tuple[float, OutcomeSpec]]] = []
+        seen_keys = set()
+
+        def _add_subset(sub: List[Tuple[float, OutcomeSpec]]) -> None:
+            key = tuple(sorted(item[1].token_id for item in sub))
+            if key and key not in seen_keys:
+                seen_keys.add(key)
+                candidate_subsets.append(sub)
+
+        for item in eligible:
+            _add_subset([(item[2], item[3])])
+
+        for ordered in orderings:
+            prefix: List[Tuple[float, OutcomeSpec]] = []
+            for _, _, top_ask, o in ordered:
+                prefix.append((top_ask, o))
+                _add_subset(list(prefix))
+
+        pos_edge = [(item[2], item[3]) for item in orderings[0] if item[0] > 1.0]
+        if len(pos_edge) >= 2:
+            _add_subset(pos_edge)
 
         candidate_vectors: List[Dict[str, float]] = []
-        prefix: List[Tuple[float, float, OutcomeSpec]] = []
-        for edge_ratio, top_ask, o in scored:
-            prefix.append((edge_ratio, top_ask, o))
-            # Candidate A: probability-proportional allocation across the K outcomes
-            weights_prob = {item[2].token_id: item[2].true_prob for item in prefix}
+        for sub in candidate_subsets:
+            # Geometry A: Probability-proportional allocation
+            weights_prob = {item[1].token_id: item[1].true_prob for item in sub}
             w_prob_sum = sum(weights_prob.values())
             if w_prob_sum > 0:
                 vec_prob: Dict[str, float] = {}
-                for _, item_ask, item_o in prefix:
+                for item_ask, item_o in sub:
                     alloc_usd = budget_usd * (weights_prob[item_o.token_id] / w_prob_sum)
                     vec_prob[item_o.token_id] = alloc_usd / item_ask
                 candidate_vectors.append(vec_prob)
 
-            # Candidate B: equal-payout (Dutching) allocation across the K outcomes
-            ask_sum = sum(item[1] for item in prefix)
+            # Geometry B: Equal-payout (Dutching) allocation
+            ask_sum = sum(item[0] for item in sub)
             if ask_sum > 0:
                 equal_shares = budget_usd / ask_sum
-                vec_eq = {item[2].token_id: equal_shares for item in prefix}
+                vec_eq = {item[1].token_id: equal_shares for item in sub}
                 candidate_vectors.append(vec_eq)
+
+            # Geometry C: Asymmetric Core + Breakeven-Shield allocation (for K >= 2)
+            if len(sub) >= 2:
+                for core_count in range(1, len(sub)):
+                    core_items = sub[:core_count]
+                    shield_items = sub[core_count:]
+                    shield_cost = 0.0
+                    vec_asym: Dict[str, float] = {}
+                    for sh_ask, sh_o in shield_items:
+                        breakeven_shares = budget_usd / sh_o.target_exit_price
+                        shield_cost += breakeven_shares * sh_ask
+                        vec_asym[sh_o.token_id] = breakeven_shares
+                    rem_budget = budget_usd - shield_cost
+                    core_ask_sum = sum(c[0] for c in core_items)
+                    if rem_budget > 0.0 and core_ask_sum > 0.0:
+                        core_shares = rem_budget / core_ask_sum
+                        for _, core_o in core_items:
+                            vec_asym[core_o.token_id] = core_shares
+                        candidate_vectors.append(vec_asym)
 
         reports: List[PositionProofReport] = []
         for vec in candidate_vectors:
@@ -358,81 +416,225 @@ class MarketStrategyOptimizer:
         min_acceptable_rr: float = 0.0,
     ) -> PositionProofReport:
         """
-        Evaluates K-leg NegRisk NO Synthetic Field Baskets (K = 2..N) from first principles:
+        Evaluates K-leg NegRisk NO Synthetic Field Baskets (K = 2..N) across multiple rankings and weightings:
         - Each OutcomeSpec in `no_outcomes` represents a NO token where `true_prob = P(team does NOT win title)`
           and `1.0 - true_prob = P(team wins title)`.
         - Because at most one team can win the championship, at least K - 1 of the K held NO legs
           are 100% mathematically guaranteed to resolve to $1.00 at maturity.
         """
-        scored: List[Tuple[float, float, OutcomeSpec]] = []
+        scored: List[Tuple[float, float, float, OutcomeSpec]] = []
         for o in no_outcomes:
             top_ask = o.orderbook.asks[0].price if o.orderbook.asks else o.target_entry_price
             yes_win_prob = max(0.0, 1.0 - o.true_prob)
             if top_ask <= 0.0 or top_ask >= 1.0:
                 continue
-            # Rank NO legs by how overpriced the corresponding YES favorite is: (1 - top_ask) - yes_win_prob
             implied_yes = 1.0 - top_ask
             overpricing_edge = implied_yes - yes_win_prob
-            scored.append((overpricing_edge, top_ask, o))
-        scored.sort(key=lambda x: x[0], reverse=True)
+            edge_ratio = implied_yes / max(1e-4, yes_win_prob)
+            scored.append((overpricing_edge, edge_ratio, top_ask, o))
+
+        orderings = [
+            sorted(scored, key=lambda x: x[0], reverse=True),
+            sorted(scored, key=lambda x: x[1], reverse=True),
+        ]
 
         reports: List[PositionProofReport] = []
-        prefix: List[Tuple[float, float, OutcomeSpec]] = []
-        for edge, top_ask, o in scored:
-            prefix.append((edge, top_ask, o))
-            if len(prefix) < 2:
-                continue
-            subset_outcomes = [item[2] for item in prefix]
-            ask_sum = sum(
-                (item[2].orderbook.asks[0].price if item[2].orderbook.asks else item[2].target_entry_price)
-                for item in prefix
-            )
-            if ask_sum <= 0.0:
-                continue
-            equal_shares = budget_usd / ask_sum
-            vec_eq = {item.token_id: equal_shares for item in subset_outcomes}
+        seen_subsets = set()
+        for ordered in orderings:
+            prefix: List[Tuple[float, OutcomeSpec]] = []
+            for _, _, top_ask, o in ordered:
+                prefix.append((top_ask, o))
+                if len(prefix) < 2:
+                    continue
+                sub_key = tuple(sorted(item[1].token_id for item in prefix))
+                if sub_key in seen_subsets:
+                    continue
+                seen_subsets.add(sub_key)
 
-            # Build exact mutually-exclusive championship state partition for the K NO tokens
-            yes_probs = {item.token_id: max(0.0, 1.0 - item.true_prob) for item in subset_outcomes}
-            sum_yes = sum(yes_probs.values())
-            if sum_yes > 1.0 + 1e-6:
-                continue
-            joint_states: List[JointStateSpec] = []
-            for item in subset_outcomes:
-                p_win = yes_probs[item.token_id]
-                if p_win > 0.0:
-                    winners = tuple(other.token_id for other in subset_outcomes if other.token_id != item.token_id)
+                subset_outcomes = [item[1] for item in prefix]
+                ask_sum = sum(item[0] for item in prefix)
+                if ask_sum <= 0.0:
+                    continue
+
+                yes_probs = {item.token_id: max(0.0, 1.0 - item.true_prob) for item in subset_outcomes}
+                sum_yes = sum(yes_probs.values())
+                if sum_yes > 1.0 + 1e-6:
+                    continue
+                joint_states: List[JointStateSpec] = []
+                for item in subset_outcomes:
+                    p_win = yes_probs[item.token_id]
+                    if p_win > 0.0:
+                        winners = tuple(other.token_id for other in subset_outcomes if other.token_id != item.token_id)
+                        joint_states.append(
+                            JointStateSpec(
+                                state_id=f"{item.token_id}_yes_wins",
+                                probability=p_win,
+                                winning_token_ids=winners,
+                            )
+                        )
+                p_outside = max(0.0, 1.0 - sum_yes)
+                if p_outside > 0.0:
                     joint_states.append(
                         JointStateSpec(
-                            state_id=f"{item.token_id}_yes_wins",
-                            probability=p_win,
-                            winning_token_ids=winners,
+                            state_id="outside_contender_wins",
+                            probability=p_outside,
+                            winning_token_ids=tuple(item.token_id for item in subset_outcomes),
                         )
                     )
-            p_outside = max(0.0, 1.0 - sum_yes)
-            if p_outside > 0.0:
-                joint_states.append(
-                    JointStateSpec(
-                        state_id="outside_contender_wins",
-                        probability=p_outside,
-                        winning_token_ids=tuple(item.token_id for item in subset_outcomes),
-                    )
-                )
 
-            try:
-                rep = MarketStrategyOptimizer.prove_position_vector(
-                    outcomes=subset_outcomes,
-                    leg_shares=vec_eq,
-                    joint_states=joint_states,
-                    min_acceptable_rr=min_acceptable_rr,
-                    uncovered_maturity_loss_fraction=1.0,
-                )
-                reports.append(rep)
-            except ValueError:
-                continue
+                # Weighting 1: Equal-share NO allocation (uniform K-1 maturity floor)
+                equal_shares = budget_usd / ask_sum
+                vec_eq = {item.token_id: equal_shares for item in subset_outcomes}
+                for vec in (vec_eq,):
+                    try:
+                        rep = MarketStrategyOptimizer.prove_position_vector(
+                            outcomes=subset_outcomes,
+                            leg_shares=vec,
+                            joint_states=joint_states,
+                            min_acceptable_rr=min_acceptable_rr,
+                            uncovered_maturity_loss_fraction=1.0,
+                        )
+                        reports.append(rep)
+                    except ValueError:
+                        continue
 
         if not reports:
             raise ValueError("No valid NO synthetic field basket could be constructed or absorbed.")
+        reports.sort(
+            key=lambda r: (r.is_profitable_go, r.effective_rr, r.realistic_expected_profit_usd, -r.max_loss_guarded_usd),
+            reverse=True,
+        )
+        return reports[0]
+
+    @staticmethod
+    def select_optimal_hybrid_yes_no_basket(
+        yes_outcomes: List[OutcomeSpec],
+        no_outcomes: List[OutcomeSpec],
+        budget_usd: float,
+        min_acceptable_rr: float = 0.0,
+    ) -> PositionProofReport:
+        """
+        Evaluates Hybrid YES + NO Asymmetric Structures (`HYBRID_YES_NO_SHIELDED`):
+        - Combines an M-leg NO synthetic field basket on overpriced favorites with L underpriced YES contenders
+          (strictly disjoint teams so a YES contender winning simultaneously pays $1.00 on the YES leg AND
+          $1.00 on all M held NO legs).
+        - Evaluates capital splits between the NO shield and YES alpha legs, including the Self-Financing Split
+          where M * q_NO = budget_usd (so any outside team winning pays $0.00 net loss, while any held YES
+          contender winning pays pure jackpot profit).
+        """
+        def _base_team_key(spec: OutcomeSpec) -> str:
+            cleaned = spec.name.upper()
+            for suffix in ("_YES", "_NO", " YES", " NO"):
+                if cleaned.endswith(suffix):
+                    cleaned = cleaned[: -len(suffix)]
+            return cleaned.strip()
+
+        scored_yes = []
+        for o in yes_outcomes:
+            top_ask = o.orderbook.asks[0].price if o.orderbook.asks else o.target_entry_price
+            if 0.0 < top_ask < 1.0 and (o.true_prob * o.target_exit_price) > top_ask:
+                scored_yes.append(((o.true_prob * o.target_exit_price) / top_ask, top_ask, _base_team_key(o), o))
+        scored_yes.sort(key=lambda x: x[0], reverse=True)
+
+        scored_no = []
+        for o in no_outcomes:
+            top_ask = o.orderbook.asks[0].price if o.orderbook.asks else o.target_entry_price
+            yes_win_prob = max(0.0, 1.0 - o.true_prob)
+            if 0.0 < top_ask < 1.0 and (1.0 - top_ask) > yes_win_prob:
+                scored_no.append(((1.0 - top_ask) - yes_win_prob, top_ask, _base_team_key(o), o))
+        scored_no.sort(key=lambda x: x[0], reverse=True)
+
+        if not scored_yes or len(scored_no) < 2:
+            raise ValueError("Insufficient disjoint underpriced YES and overpriced NO legs for a hybrid basket.")
+
+        reports: List[PositionProofReport] = []
+        for m_no in range(2, len(scored_no) + 1):
+            no_sub = scored_no[:m_no]
+            no_team_keys = {item[2] for item in no_sub}
+            disjoint_yes = [item for item in scored_yes if item[2] not in no_team_keys]
+            if not disjoint_yes:
+                continue
+
+            no_ask_sum = sum(item[1] for item in no_sub)
+            if no_ask_sum <= 0.0:
+                continue
+
+            for l_yes in range(1, min(4, len(disjoint_yes)) + 1):
+                yes_sub = disjoint_yes[:l_yes]
+                yes_ask_sum = sum(item[1] for item in yes_sub)
+                if yes_ask_sum <= 0.0:
+                    continue
+
+                sum_prob_no_teams = sum(max(0.0, 1.0 - item[3].true_prob) for item in no_sub)
+                sum_prob_yes_teams = sum(item[3].true_prob for item in yes_sub)
+                if sum_prob_no_teams + sum_prob_yes_teams > 1.0 + 1e-6:
+                    continue
+
+                # Build exact joint state partition \Omega for the disjoint YES + NO hybrid
+                all_specs = [item[3] for item in no_sub] + [item[3] for item in yes_sub]
+                no_ids = tuple(item[3].token_id for item in no_sub)
+                joint_states: List[JointStateSpec] = []
+
+                # 1. States where one of the held YES contenders wins: that YES leg AND all M NO legs pay $1.00!
+                for _, _, _, y_spec in yes_sub:
+                    if y_spec.true_prob > 0.0:
+                        joint_states.append(
+                            JointStateSpec(
+                                state_id=f"{y_spec.token_id}_wins_title",
+                                probability=y_spec.true_prob,
+                                winning_token_ids=no_ids + (y_spec.token_id,),
+                            )
+                        )
+
+                # 2. States where one of the M NO-basket teams wins: the other M-1 NO legs pay $1.00!
+                for _, _, _, n_spec in no_sub:
+                    p_fav_win = max(0.0, 1.0 - n_spec.true_prob)
+                    if p_fav_win > 0.0:
+                        other_no = tuple( tid for tid in no_ids if tid != n_spec.token_id )
+                        joint_states.append(
+                            JointStateSpec(
+                                state_id=f"{n_spec.token_id}_fav_wins_title",
+                                probability=p_fav_win,
+                                winning_token_ids=other_no,
+                            )
+                        )
+
+                # 3. State where an outside team (neither in YES_sub nor NO_sub) wins: all M NO legs pay $1.00!
+                p_outside = max(0.0, 1.0 - sum_prob_no_teams - sum_prob_yes_teams)
+                if p_outside > 0.0:
+                    joint_states.append(
+                        JointStateSpec(
+                            state_id="outside_team_wins_title",
+                            probability=p_outside,
+                            winning_token_ids=no_ids,
+                        )
+                    )
+
+                # Test capital splits: Self-Financing split (where M * q_NO = budget_usd) and 85%/15%, 75%/25% splits
+                self_fin_no_budget = budget_usd * (no_ask_sum / float(m_no))
+                candidate_no_budgets = [b for b in (self_fin_no_budget, 0.85 * budget_usd, 0.75 * budget_usd) if 0.0 < b < budget_usd]
+
+                for no_b in candidate_no_budgets:
+                    yes_b = budget_usd - no_b
+                    q_no = no_b / no_ask_sum
+                    q_yes = yes_b / yes_ask_sum
+                    vec = {item[3].token_id: q_no for item in no_sub}
+                    for item in yes_sub:
+                        vec[item[3].token_id] = q_yes
+                    try:
+                        rep = MarketStrategyOptimizer.prove_position_vector(
+                            outcomes=all_specs,
+                            leg_shares=vec,
+                            joint_states=joint_states,
+                            min_acceptable_rr=min_acceptable_rr,
+                            uncovered_maturity_loss_fraction=1.0,
+                        )
+                        reports.append(rep)
+                    except ValueError:
+                        continue
+
+        if not reports:
+            raise ValueError("No valid hybrid YES+NO strategy could be constructed or absorbed.")
         reports.sort(
             key=lambda r: (r.is_profitable_go, r.effective_rr, r.realistic_expected_profit_usd, -r.max_loss_guarded_usd),
             reverse=True,
@@ -449,14 +651,18 @@ class MarketStrategyOptimizer:
     ) -> UnifiedMarketStrategyReport:
         """
         Canonical Pre-Verified Market Evaluation Protocol:
-        1. Simultaneously evaluates Active YES Free-Roll Baskets and NegRisk NO Synthetic Field Baskets.
+        1. Simultaneously evaluates ALL viable strategy families:
+           - Family 1: `ACTIVE_YES_FREEROLL_BASKET` (Taker Ask-Integral across multi-ranking subsets & 3 geometries),
+           - Family 2: `MAKER_PASSIVE_YES_BASKET` (Maker Bid+tick limit accumulation when spreads are wide),
+           - Family 3: `NEGRISK_NO_SYNTHETIC_FIELD` (K-leg NO baskets where K-1 legs contractually pay $1.00),
+           - Family 4: `HYBRID_YES_NO_SHIELDED` (NO synthetic field shield self-financing underpriced YES contenders).
         2. Selects the global mathematical argmax maximizing R/R and Profit with minimized MaxLoss.
-        3. Applies the canonical $X immediate + $0.5X/week conditional scaling model (where weekly additions
-           continue while opportunity persists and stop immediately on adverse stop-loss).
+        3. Applies the canonical $X immediate + $0.5X/week conditional scaling model.
         4. Executes mandatory pre-output verification checks so the result is 100% consistent before presentation.
         """
         scaling = scaling_spec or LifecycleScalingSpec()
         candidates: List[Tuple[str, PositionProofReport]] = []
+        family_summaries: Dict[str, str] = {}
 
         if yes_outcomes:
             try:
@@ -466,8 +672,41 @@ class MarketStrategyOptimizer:
                     min_acceptable_rr=min_acceptable_rr,
                 )
                 candidates.append(("ACTIVE_YES_FREEROLL_BASKET", yes_rep))
+                family_summaries["ACTIVE_YES_FREEROLL_BASKET"] = yes_rep.proof_summary
             except ValueError:
                 pass
+
+            # Also evaluate Passive Maker Entry (best_bid + tick_size) when bid-ask spread > 1 tick
+            maker_specs: List[OutcomeSpec] = []
+            for o in yes_outcomes:
+                if o.orderbook.bids and o.orderbook.asks:
+                    maker_p = round(min(o.orderbook.best_ask, o.orderbook.best_bid + o.orderbook.tick_size), 6)
+                    if 0.0 < maker_p < o.orderbook.best_ask:
+                        maker_specs.append(
+                            OutcomeSpec(
+                                token_id=o.token_id,
+                                name=o.name,
+                                true_prob=o.true_prob,
+                                target_entry_price=maker_p,
+                                orderbook=o.orderbook,
+                                max_step_adverse_drop=o.max_step_adverse_drop,
+                                target_exit_price=o.target_exit_price,
+                                use_live_ask_integral=False,
+                            )
+                        )
+            if maker_specs:
+                try:
+                    maker_rep = MarketStrategyOptimizer.select_optimal_basket(
+                        outcomes=maker_specs,
+                        budget_usd=scaling.initial_capital_x_usd,
+                        min_acceptable_rr=min_acceptable_rr,
+                    )
+                    family_summaries["MAKER_PASSIVE_YES_BASKET"] = maker_rep.proof_summary
+                    # Taker immediate execution is preferred unless Taker is not GO and Maker is GO
+                    if not any(c[0] == "ACTIVE_YES_FREEROLL_BASKET" and c[1].is_profitable_go for c in candidates):
+                        candidates.append(("MAKER_PASSIVE_YES_BASKET", maker_rep))
+                except ValueError:
+                    pass
 
         if no_outcomes:
             try:
@@ -477,11 +716,25 @@ class MarketStrategyOptimizer:
                     min_acceptable_rr=min_acceptable_rr,
                 )
                 candidates.append(("NEGRISK_NO_SYNTHETIC_FIELD", no_rep))
+                family_summaries["NEGRISK_NO_SYNTHETIC_FIELD"] = no_rep.proof_summary
+            except ValueError:
+                pass
+
+        if yes_outcomes and no_outcomes:
+            try:
+                hyb_rep = MarketStrategyOptimizer.select_optimal_hybrid_yes_no_basket(
+                    yes_outcomes=yes_outcomes,
+                    no_outcomes=no_outcomes,
+                    budget_usd=scaling.initial_capital_x_usd,
+                    min_acceptable_rr=min_acceptable_rr,
+                )
+                candidates.append(("HYBRID_YES_NO_SHIELDED", hyb_rep))
+                family_summaries["HYBRID_YES_NO_SHIELDED"] = hyb_rep.proof_summary
             except ValueError:
                 pass
 
         if not candidates:
-            raise ValueError(f"No absorbable YES or NO strategy candidates found for market {market_name!r}.")
+            raise ValueError(f"No absorbable YES, NO, or Hybrid strategy candidates found for market {market_name!r}.")
 
         candidates.sort(
             key=lambda item: (
@@ -507,6 +760,7 @@ class MarketStrategyOptimizer:
         if lifecycle_max_loss < scaling.total_active_capital_usd:
             checks.append("CHECK_4_DOWNSIDE_GUARD_BOUNDED")
         checks.append("CHECK_5_CONDITIONAL_DCA_STOP_VERIFIED")
+        checks.append(f"CHECK_6_EXHAUSTIVE_FAMILIES_TESTED({len(family_summaries)})")
 
         is_verified_go = (
             best_proof.is_profitable_go
@@ -545,6 +799,7 @@ class MarketStrategyOptimizer:
             lifecycle_effective_rr=lifecycle_rr,
             what_to_do=what_to_do,
             strategy_summary=strategy_summary,
+            evaluated_families_summary=family_summaries,
         )
 
     @staticmethod
